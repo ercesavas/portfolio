@@ -1,0 +1,34 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Basketball — Advanced Stats</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8f8f6;color:#1a1a1a;padding:1.5rem}h1{font-size:22px;font-weight:500;margin-bottom:4px}.sub{font-size:13px;color:#666;margin-bottom:1.5rem}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem}.ct{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px}.bar-bg{flex:1;height:7px;background:#f0f0f0;border-radius:3px;overflow:hidden}.bar-fill{height:100%;border-radius:3px}.rnum{font-size:13px;font-weight:500;width:20px;color:#888}.rnum.r1{color:#92400e}.rnum.r2{color:#6b7280}.rnum.r3{color:#713f12}.rname{font-size:13px;min-width:80px}.rval{font-size:13px;font-weight:500;min-width:58px;text-align:right}.av{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:500;flex-shrink:0}.info{background:#f0f4ff;border-radius:8px;padding:.75rem 1rem;font-size:12px;color:#334;line-height:1.6;margin-top:8px}</style></head><body>
+<h1>Advanced Stats</h1>
+<div class="sub">eFG% · ORB% · DRB% · TRB% · EFF/g · PIE median — all group-relative</div>
+<div class="grid" id="rank-grid"></div>
+<div class="card"><div class="ct">What each stat means</div>
+  <p style="font-size:12px;color:#555;line-height:1.7"><strong>eFG%</strong> — adjusts shooting % for 2pt shots worth more. (FGM + 0.5×2ptMade) / FGA<br>
+  <strong>ORB%</strong> — of all available offensive rebounds, what % you grabbed.<br>
+  <strong>DRB%</strong> — same for defensive rebounds.<br>
+  <strong>TRB%</strong> — combined rebounding rate.<br>
+  <strong>EFF/g</strong> — PTS + REB + AST + STL + BLK − TOV − missed shots. Per game.<br>
+  <strong>PIE median</strong> — your typical share of total game impact. Fair share in 4-player game = 0.25.</p>
+</div>
+<script>
+const COLORS={Erce:"#378ADD",Albroz:"#639922",Marwan:"#E24B4A",Jalal:"#EF9F27",Jackson:"#7F77DD",Moe:"#1D9E75",Fernando:"#D4537E"};
+const cats=[
+  {l:"eFG%",desc:"Effective field goal %",data:[{p:"Erce",v:39.6},{p:"Albroz",v:38.6},{p:"Marwan",v:38.3},{p:"Jalal",v:35.3},{p:"Moe",v:31.2},{p:"Fernando",v:28.8},{p:"Jackson",v:26.5}],fmt:v=>v.toFixed(1)+"%"},
+  {l:"ORB%",desc:"Offensive rebounding %",data:[{p:"Jalal",v:21.2},{p:"Erce",v:18.9},{p:"Fernando",v:15.2},{p:"Marwan",v:13.9},{p:"Moe",v:13.1},{p:"Jackson",v:11.5},{p:"Albroz",v:8.8}],fmt:v=>v.toFixed(1)+"%"},
+  {l:"DRB%",desc:"Defensive rebounding %",data:[{p:"Erce",v:37.3},{p:"Marwan",v:32.4},{p:"Albroz",v:32.1},{p:"Jalal",v:31.3},{p:"Jackson",v:26.5},{p:"Moe",v:21.8},{p:"Fernando",v:20.6}],fmt:v=>v.toFixed(1)+"%"},
+  {l:"TRB%",desc:"Total rebounding %",data:[{p:"Erce",v:28.2},{p:"Jalal",v:26.4},{p:"Marwan",v:23.3},{p:"Albroz",v:20.8},{p:"Jackson",v:18.7},{p:"Moe",v:17.7},{p:"Fernando",v:17.6}],fmt:v=>v.toFixed(1)+"%"},
+  {l:"EFF/g",desc:"Efficiency per game",data:[{p:"Erce",v:10.16},{p:"Marwan",v:8.68},{p:"Jalal",v:6.59},{p:"Albroz",v:5.16},{p:"Fernando",v:3.73},{p:"Jackson",v:3.43},{p:"Moe",v:3.36}],fmt:v=>v.toFixed(2)},
+  {l:"PIE median",desc:"Typical per-game impact share",data:[{p:"Erce",v:30.3},{p:"Marwan",v:30.1},{p:"Albroz",v:24.2},{p:"Jalal",v:19.9},{p:"Fernando",v:11.9},{p:"Jackson",v:6.5},{p:"Moe",v:4.8}],fmt:v=>v.toFixed(1)+"%"},
+];
+function barC(r){return r===0?"#92400e":r===1?"#6b7280":r===2?"#713f12":"#1a56db";}
+document.getElementById("rank-grid").innerHTML=cats.map(cat=>{
+  const maxV=cat.data[0].v,minV=cat.data[cat.data.length-1].v,range=maxV-minV||1;
+  const rows=cat.data.map(({p,v},r)=>{
+    const bw=Math.round((v-minV)/range*100);
+    const nc=r===0?"r1":r===1?"r2":r===2?"r3":"";
+    return `<div class="bar-row"><span class="rnum ${nc}">${r+1}</span><div class="av" style="background:${COLORS[p]}20;color:${COLORS[p]}">${p.slice(0,2).toUpperCase()}</div><span class="rname">${p}</span><div class="bar-bg"><div class="bar-fill" style="width:${bw}%;background:${barC(r)}"></div></div><span class="rval" style="color:${barC(r)}">${cat.fmt(v)}</span></div>`;
+  }).join("");
+  return `<div class="card"><div class="ct">${cat.l}</div><p style="font-size:11px;color:#888;margin-bottom:8px;font-style:italic">${cat.desc}</p>${rows}</div>`;
+}).join("");
+</script></body></html>

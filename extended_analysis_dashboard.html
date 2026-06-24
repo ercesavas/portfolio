@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Basketball — Extended Analysis</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f8f8f6; color: #1a1a1a; padding: 1.5rem; }
+    h1 { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #666; margin-bottom: 1.5rem; }
+
+    /* Metric cards at top */
+    .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 1.5rem; }
+    .metric { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 14px; }
+    .metric-label { font-size: 11px; color: #666; margin-bottom: 4px; }
+    .metric-val { font-size: 22px; font-weight: 500; color: #1a1a1a; }
+    .metric-sub { font-size: 11px; color: #888; margin-top: 2px; }
+
+    /* Tab nav */
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .tab { padding: 6px 13px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; cursor: pointer; background: #fff; color: #555; }
+    .tab.active { background: #1a56db; color: #fff; border-color: #1a56db; font-weight: 500; }
+
+    /* Sections */
+    .section { display: none; }
+    .section.active { display: block; }
+
+    /* Cards */
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .card-title { font-size: 12px; color: #666; font-weight: 500; margin-bottom: 8px; }
+
+    /* Tables */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 10px; color: #666; font-weight: 500; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+    td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; color: #1a1a1a; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+
+    /* Bar rows */
+    .bar-wrap { display: flex; align-items: center; gap: 8px; }
+    .bar-bg { flex: 1; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; min-width: 60px; }
+    .bar-fill { height: 100%; border-radius: 4px; }
+
+    /* Badges */
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; }
+    .bg { background: #d1fae5; color: #065f46; }
+    .br { background: #fee2e2; color: #991b1b; }
+    .ba { background: #fef3c7; color: #92400e; }
+    .bi { background: #dbeafe; color: #1e40af; }
+
+    /* Section title */
+    .stitle { font-size: 15px; font-weight: 500; margin-bottom: 1rem; color: #1a1a1a; }
+
+    /* Two column layout */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 560px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* Note / caption */
+    .note { font-size: 12px; color: #888; margin-top: 0.5rem; font-style: italic; }
+
+    /* Player dropdown */
+    .player-sel {
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 13px;
+      background: #fff;
+      color: #1a1a1a;
+      margin-bottom: 1rem;
+      margin-right: 8px;
+    }
+
+    /* Monthly trend dots grid */
+    .trend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-bottom: 1rem; }
+    .trend-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; }
+    .trend-name { font-size: 12px; font-weight: 500; color: #1a1a1a; margin-bottom: 6px; }
+    .trend-dots { display: flex; gap: 4px; flex-wrap: wrap; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Chart wrapper */
+    .chart-container { position: relative; width: 100%; }
+  </style>
+</head>
+<body>
+
+<h1>Extended Analysis Dashboard</h1>
+<div class="sub">Monthly trends · streaks · clutch & blowouts · head-to-head · format · scores & margins · over-rule</div>
+
+<!-- Top-level metric cards -->
+<div class="metric-row">
+  <div class="metric">
+    <div class="metric-label">First scorer wins</div>
+    <div class="metric-val">57.9%</div>
+    <div class="metric-sub">33 of 57 games</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Winning first = session dominance</div>
+    <div class="metric-val">65.9%</div>
+    <div class="metric-sub">29/44 remaining games</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Rematch win (prev loser)</div>
+    <div class="metric-val">38.9%</div>
+    <div class="metric-sub">14 of 36 rematches</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Over-rule games</div>
+    <div class="metric-val">22</div>
+    <div class="metric-sub">of 66 total</div>
+  </div>
+</div>
+
+<!-- Tab navigation -->
+<div class="tabs">
+  <button class="tab active" onclick="showTab('trends',this)">Monthly trends</button>
+  <button class="tab" onclick="showTab('streaks',this)">Streaks</button>
+  <button class="tab" onclick="showTab('clutch',this)">Clutch &amp; blowouts</button>
+  <button class="tab" onclick="showTab('h2h',this)">Head-to-head</button>
+  <button class="tab" onclick="showTab('format',this)">2v2 vs 3v3</button>
+  <button class="tab" onclick="showTab('margins',this)">Scores &amp; margins</button>
+  <button class="tab" onclick="showTab('over',this)">Over-rule deep dive</button>
+</div>
+
+
+<!-- ============================================================
+     TAB 1: MONTHLY TRENDS
+     ============================================================ -->
+<div id="tab-trends" class="section active">
+
+  <div class="stitle">Win % by month — pick a player</div>
+
+  <select class="player-sel" id="trend-player" onchange="renderTrend()">
+    <option>Erce</option>
+    <option>Albroz</option>
+    <option>Jalal</option>
+    <option>Marwan</option>
+    <option>Moe</option>
+    <option>Jackson</option>
+    <option>Fernando</option>
+  </select>
+
+  <!-- Chart.js line chart — monthly win % for selected player -->
+  <div class="chart-container" style="height:260px">
+    <canvas id="trendChart" role="img" aria-label="Monthly win percentage trend for selected player"></canvas>
+  </div>
+
+  <div style="margin-top:1.5rem">
+    <div class="stitle">All players — win % dot trail (green = winning month, red = losing)</div>
+    <!-- Dot trail grid — one card per player, one dot per month -->
+    <div class="trend-grid" id="trend-dots-all"></div>
+  </div>
+
+  <p class="note">Each dot = one month. Green = winning month (&gt;50%), red = losing month (&lt;50%).</p>
+</div>
+
+
+<!-- ============================================================
+     TAB 2: STREAKS
+     ============================================================ -->
+<div id="tab-streaks" class="section">
+
+  <div class="two-col" style="margin-bottom:1rem">
+    <div class="card">
+      <div class="card-title">Longest win streak</div>
+      <div style="font-size:18px;font-weight:500;color:#065f46">Erce — 12 in a row</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Longest loss streak</div>
+      <div style="font-size:18px;font-weight:500;color:#991b1b">Jalal — 11 in a row</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Best win streak</th>
+          <th>Worst loss streak</th>
+          <th>Bounce-back rate</th>
+        </tr>
+      </thead>
+      <tbody id="streak-tbody"></tbody>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:0.75rem">
+    Bounce-back rate = win % in the game immediately following a loss.
+    Erce bounces back best (64.3%). Jalal struggles most to recover (33.3%).
+  </p>
+</div>
+
+
+<!-- ============================================================
+     TAB 3: CLUTCH & BLOWOUTS
+     ============================================================ -->
+<div id="tab-clutch" class="section">
+
+  <div class="stitle">Clutch record — games decided by 1–2 points (12 total)</div>
+  <div class="table-wrap" style="margin-bottom:1.5rem">
+    <table>
+      <thead>
+        <tr><th>Player</th><th>W</th><th>G</th><th>Clutch win %</th><th></th></tr>
+      </thead>
+      <tbody id="clutch-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="stitle">Blowout record — games decided by 10+ points (22 total)</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Player</th><th>W</th><th>G</th><th>Blowout win %</th><th></th></tr>
+      </thead>
+      <tbody id="blowout-tbody"></tbody>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:0.75rem">
+    Erce is a blowout merchant — 85.7% in blowouts. Jackson is the opposite: perfect in close games.
+    Jalal is rough in both, but especially bad in blowouts (15.4%).
+    Jackson & Fernando clutch numbers are small samples (2–3 games).
+  </p>
+</div>
+
+
+<!-- ============================================================
+     TAB 4: HEAD-TO-HEAD
+     ============================================================ -->
+<div id="tab-h2h" class="section">
+
+  <div class="stitle">Individual head-to-head — opponents across all games</div>
+  <div class="table-wrap" style="margin-bottom:1rem">
+    <table>
+      <thead>
+        <tr><th>Matchup</th><th>Games</th><th>P1 wins</th><th>P2 wins</th><th>Dominance</th></tr>
+      </thead>
+      <tbody id="h2h-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Pairs who have NEVER been teammates</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+      <span class="badge ba">Fernando &amp; Jalal</span>
+      <span class="badge ba">Fernando &amp; Moe</span>
+      <span class="badge ba">Jackson &amp; Moe</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 5: 2v2 VS 3v3
+     ============================================================ -->
+<div id="tab-format" class="section">
+
+  <div class="stitle">2v2 vs 3v3 win rate — who changes the most?</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Player</th><th>2v2 win %</th><th>3v3 win %</th><th>Difference</th><th>Better format</th></tr>
+      </thead>
+      <tbody id="format-tbody"></tbody>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:0.75rem">
+    Jackson flips hardest: 90% in 2v2, only 18.2% in 3v3.
+    Moe is the exact reverse: 30% in 2v2, 75% in 3v3.
+    If you're picking teams for 3v3, always pick Moe over Jackson.
+  </p>
+</div>
+
+
+<!-- ============================================================
+     TAB 6: SCORES & MARGINS
+     ============================================================ -->
+<div id="tab-margins" class="section">
+
+  <div class="two-col" style="margin-bottom:1rem">
+    <div>
+      <div class="stitle">Most common final scores</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Score</th><th>Times</th></tr></thead>
+          <tbody id="score-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="stitle">Losing score distribution</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Range</th><th>Games</th><th>% of total</th></tr></thead>
+          <tbody>
+            <tr><td>Under 10 (blowout)</td><td>10</td><td><span class="badge br">15.2%</span></td></tr>
+            <tr><td>10–14</td><td>17</td><td>25.8%</td></tr>
+            <tr><td>15–18</td><td>29</td><td><span class="badge bg">43.9%</span></td></tr>
+            <tr><td>19+ (very close)</td><td>10</td><td>15.2%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note" style="margin-top:0.75rem">Most games are competitive — 43.9% have the loser scoring 15–18.</p>
+    </div>
+  </div>
+
+  <div class="stitle">Avg winning / losing margin per player</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Player</th><th>Avg win margin</th><th>Avg loss margin</th><th>Style</th></tr>
+      </thead>
+      <tbody id="margin-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 7: OVER-RULE DEEP DIVE
+     ============================================================ -->
+<div id="tab-over" class="section">
+
+  <div class="card">
+    <div class="card-title">What "over-rule" means</div>
+    <div style="font-size:13px;color:#1a1a1a;line-height:1.6">
+      The winning score exceeded the stated scoring rule (e.g. winning 22–16 in a game played to 21).
+      This happens when a "win by 2" rule is applied — you can't win unless you're ahead by 2.
+      22 of 66 games went over the standard rule.
+    </div>
+  </div>
+
+  <div class="stitle">Players most involved in over-rule games</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Player</th><th>Over-rule games</th><th>Their total games</th><th>Rate</th><th></th></tr>
+      </thead>
+      <tbody id="over-tbody"></tbody>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:0.75rem">
+    Moe (46.4%) and Fernando (45.5%) are most often in games that go over the rule.
+    Could suggest looser game-ending enforcement or more competitive matchups when they play.
+  </p>
+</div>
+
+
+<!-- ============================================================
+     JAVASCRIPT — data + rendering
+     ============================================================ -->
+<script>
+
+/* ------------------------------------------------------------------
+   DATA
+   ------------------------------------------------------------------ */
+
+/* Monthly win % per player — [month_label, win_pct] */
+const trendData = {
+  Erce:    { months:['Dec 24','Jan 25','Feb 25','Mar 25','Apr 25','May 25','Jun 25','Jul 25','Aug 25'],    pcts:[100,66.7,75,70,66.7,85.7,87.5,75,40] },
+  Albroz:  { months:['Dec 24','Jan 25','Feb 25','Mar 25','Apr 25','May 25','Jun 25','Jul 25','Aug 25','Sep 25'], pcts:[100,33.3,0,40,38.5,50,87.5,25,40,80] },
+  Jalal:   { months:['Dec 24','Jan 25','Feb 25','Mar 25','Apr 25','May 25','Jun 25','Jul 25','Aug 25','Sep 25'], pcts:[0,33.3,25,33.3,21.4,27.3,12.5,50,60,100] },
+  Marwan:  { months:['Dec 24','Jan 25','Feb 25','Mar 25','Apr 25','May 25','Jun 25','Aug 25','Sep 25'], pcts:[0,66.7,100,40,90,36.4,12.5,60,20] },
+  Moe:     { months:['Mar 25','Apr 25','May 25','Jun 25','Jul 25','Sep 25'], pcts:[42.9,20,50,100,50,20] },
+  Jackson: { months:['Feb 25','Mar 25','Apr 25','May 25','Jun 25'], pcts:[0,60,100,100,0] },
+  Fernando:{ months:['Feb 25','Mar 25','Sep 25'], pcts:[100,40,66.7] },
+};
+
+/* Dot trail summary — all players */
+const allTrendSummary = [
+  { name:'Erce',     data:[100,66.7,75,70,66.7,85.7,87.5,75,40] },
+  { name:'Albroz',   data:[100,33.3,0,40,38.5,50,87.5,25,40,80] },
+  { name:'Jalal',    data:[0,33.3,25,33.3,21.4,27.3,12.5,50,60,100] },
+  { name:'Marwan',   data:[0,66.7,100,40,90,36.4,12.5,60,20] },
+  { name:'Moe',      data:[42.9,20,50,100,50,20] },
+  { name:'Jackson',  data:[0,60,100,100,0] },
+  { name:'Fernando', data:[100,40,66.7] },
+];
+
+/* Streaks + bounce-back rate */
+const streaks = [
+  { p:'Erce',     ws:12, ls:3,  bb:64.3 },
+  { p:'Albroz',   ws:7,  ls:7,  bb:40.6 },
+  { p:'Marwan',   ws:7,  ls:9,  bb:38.5 },
+  { p:'Jackson',  ws:5,  ls:3,  bb:44.4 },
+  { p:'Moe',      ws:5,  ls:4,  bb:46.7 },
+  { p:'Jalal',    ws:5,  ls:11, bb:33.3 },
+  { p:'Fernando', ws:3,  ls:2,  bb:50   },
+];
+
+/* Clutch (margin ≤2) and blowout (margin ≥10) records */
+const clutch  = [ {p:'Jackson',w:3,g:3},{p:'Fernando',w:2,g:2},{p:'Erce',w:5,g:8},{p:'Albroz',w:6,g:12},{p:'Marwan',w:5,g:11},{p:'Moe',w:2,g:5},{p:'Jalal',w:2,g:9} ];
+const blowout = [ {p:'Erce',w:12,g:14},{p:'Jackson',w:4,g:5},{p:'Fernando',w:2,g:3},{p:'Marwan',w:7,g:13},{p:'Albroz',w:6,g:15},{p:'Moe',w:1,g:5},{p:'Jalal',w:2,g:13} ];
+
+/* Head-to-head — who played each other most and what's the record */
+const h2h = [
+  { m:'Albroz vs Marwan',   g:45, p1:'Albroz',  p1w:23, p2:'Marwan',  p2w:22 },
+  { m:'Erce vs Jalal',      g:38, p1:'Erce',    p1w:30, p2:'Jalal',   p2w:8  },
+  { m:'Erce vs Marwan',     g:32, p1:'Erce',    p1w:20, p2:'Marwan',  p2w:12 },
+  { m:'Albroz vs Jalal',    g:30, p1:'Albroz',  p1w:19, p2:'Jalal',   p2w:11 },
+  { m:'Albroz vs Erce',     g:25, p1:'Albroz',  p1w:6,  p2:'Erce',    p2w:19 },
+  { m:'Jalal vs Marwan',    g:23, p1:'Jalal',   p1w:6,  p2:'Marwan',  p2w:17 },
+  { m:'Jalal vs Moe',       g:16, p1:'Jalal',   p1w:8,  p2:'Moe',     p2w:8  },
+  { m:'Albroz vs Jackson',  g:14, p1:'Albroz',  p1w:7,  p2:'Jackson', p2w:7  },
+  { m:'Albroz vs Moe',      g:13, p1:'Albroz',  p1w:8,  p2:'Moe',     p2w:5  },
+  { m:'Erce vs Jackson',    g:12, p1:'Erce',    p1w:9,  p2:'Jackson', p2w:3  },
+  { m:'Jackson vs Moe',     g:10, p1:'Jackson', p1w:4,  p2:'Moe',     p2w:6  },
+  { m:'Erce vs Moe',        g:9,  p1:'Erce',    p1w:8,  p2:'Moe',     p2w:1  },
+  { m:'Jackson vs Jalal',   g:8,  p1:'Jackson', p1w:7,  p2:'Jalal',   p2w:1  },
+];
+
+/* 2v2 vs 3v3 format splits */
+const format = [
+  { p:'Jackson',  v2:90,   v3:18.2 },
+  { p:'Moe',      v2:30,   v3:75   },
+  { p:'Erce',     v2:70.5, v3:81.8 },
+  { p:'Albroz',   v2:47.1, v3:54.5 },
+  { p:'Marwan',   v2:50,   v3:45.5 },
+  { p:'Fernando', v2:66.7, v3:62.5 },
+  { p:'Jalal',    v2:34,   v3:0    },
+];
+
+/* Most common final scores */
+const scores = [
+  {s:'21–18',n:5},{s:'22–16',n:5},{s:'21–17',n:4},{s:'21–13',n:4},
+  {s:'21–15',n:3},{s:'21–9',n:3}, {s:'21–11',n:3},{s:'22–17',n:3},
+  {s:'21–19',n:2},{s:'21–8',n:2},
+];
+
+/* Avg margin per player in wins vs losses */
+const margins = [
+  { p:'Erce',    wm:7.1, lm:5.4 },
+  { p:'Jackson', wm:7.4, lm:6.9 },
+  { p:'Fernando',wm:6.1, lm:8.5 },
+  { p:'Albroz',  wm:6.1, lm:6.4 },
+  { p:'Marwan',  wm:6.0, lm:6.3 },
+  { p:'Jalal',   wm:5.8, lm:6.4 },
+  { p:'Moe',     wm:5.8, lm:6.5 },
+];
+
+/* Over-rule involvement */
+const over = [
+  { p:'Moe',     bad:13, total:28 },
+  { p:'Fernando',bad:5,  total:11 },
+  { p:'Marwan',  bad:20, total:53 },
+  { p:'Albroz',  bad:21, total:62 },
+  { p:'Jalal',   bad:17, total:56 },
+  { p:'Erce',    bad:16, total:55 },
+  { p:'Jackson', bad:6,  total:21 },
+];
+
+
+/* ------------------------------------------------------------------
+   HELPERS
+   ------------------------------------------------------------------ */
+
+/* Colour helpers for win% values */
+function pctColor(p) { return p>=70?'#065f46':p>=50?'#1e40af':p>=30?'#92400e':'#991b1b'; }
+function barColor(p)  { return p>=70?'#639922':p>=50?'#378ADD':p>=30?'#EF9F27':'#E24B4A'; }
+
+
+/* ------------------------------------------------------------------
+   CHART: Monthly trend line for one player
+   Destroyed and rebuilt on player change to avoid canvas conflicts.
+   ------------------------------------------------------------------ */
+let trendChart = null;
+
+function renderTrend() {
+  const player = document.getElementById('trend-player').value;
+  const d = trendData[player];
+
+  if (trendChart) trendChart.destroy();
+
+  trendChart = new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels: d.months,
+      datasets: [{
+        label: player + ' win %',
+        data: d.pcts,
+        borderColor: '#378ADD',
+        backgroundColor: 'rgba(55,138,221,0.1)',
+        /* Point colour: green if winning month, red if losing */
+        pointBackgroundColor: d.pcts.map(p => p >= 50 ? '#639922' : '#E24B4A'),
+        pointRadius: 6,
+        tension: 0.3,
+        fill: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { min:0, max:100, ticks: { callback: v => v+'%', color:'#888' }, grid: { color:'rgba(128,128,128,0.15)' } },
+        x: { ticks: { color:'#888' }, grid: { color:'rgba(128,128,128,0.1)' } },
+      },
+    },
+  });
+}
+
+
+/* ------------------------------------------------------------------
+   DOT TRAIL: one dot per month per player
+   ------------------------------------------------------------------ */
+function renderAllDots() {
+  document.getElementById('trend-dots-all').innerHTML = allTrendSummary.map(({ name, data }) => `
+    <div class="trend-card">
+      <div class="trend-name">${name}</div>
+      <div class="trend-dots">
+        ${data.map(p =>
+          `<div class="dot" style="background:${p >= 50 ? '#639922' : '#E24B4A'}" title="${p}%"></div>`
+        ).join('')}
+      </div>
+    </div>`).join('');
+}
+
+
+/* ------------------------------------------------------------------
+   BUILD: streak table
+   ------------------------------------------------------------------ */
+document.getElementById('streak-tbody').innerHTML = streaks.map(d => {
+  const bbClass = d.bb >= 55 ? 'bg' : d.bb >= 40 ? 'bi' : 'br';
+  return `<tr>
+    <td style="font-weight:500">${d.p}</td>
+    <td><span class="badge bg">${d.ws}</span></td>
+    <td><span class="badge br">${d.ls}</span></td>
+    <td><span class="badge ${bbClass}">${d.bb}%</span></td>
+  </tr>`;
+}).join('');
+
+
+/* ------------------------------------------------------------------
+   BUILD: clutch + blowout tables
+   ------------------------------------------------------------------ */
+function buildResultTable(tbodyId, data) {
+  document.getElementById(tbodyId).innerHTML = data
+    .sort((a, b) => (b.w / b.g) - (a.w / a.g))
+    .map(d => {
+      const pct = Math.round(d.w / d.g * 100 * 10) / 10;
+      return `<tr>
+        <td style="font-weight:500">${d.p}</td>
+        <td>${d.w}</td>
+        <td>${d.g}</td>
+        <td style="font-weight:500;color:${pctColor(pct)}">${pct}%</td>
+        <td>
+          <div class="bar-wrap">
+            <div class="bar-bg">
+              <div class="bar-fill" style="width:${pct}%;background:${barColor(pct)}"></div>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+}
+buildResultTable('clutch-tbody',  clutch);
+buildResultTable('blowout-tbody', blowout);
+
+
+/* ------------------------------------------------------------------
+   BUILD: head-to-head table
+   ------------------------------------------------------------------ */
+document.getElementById('h2h-tbody').innerHTML = h2h.map(d => {
+  const p1pct = Math.round(d.p1w / d.g * 100 * 10) / 10;
+  const diff = Math.abs(d.p1w - d.p2w);
+  const dom = diff <= 2
+    ? '<span class="badge bi">even</span>'
+    : diff <= 6 ? ''
+    : `<span class="badge ${d.p1w > d.p2w ? 'bg' : 'br'}">${d.p1w > d.p2w ? d.p1 : d.p2} dominates</span>`;
+  return `<tr>
+    <td style="font-weight:500">${d.m}</td>
+    <td>${d.g}</td>
+    <td>${d.p1w} (${p1pct}%)</td>
+    <td>${d.p2w} (${Math.round((100 - p1pct) * 10) / 10}%)</td>
+    <td>${dom}</td>
+  </tr>`;
+}).join('');
+
+
+/* ------------------------------------------------------------------
+   BUILD: 2v2 vs 3v3 format table
+   Sorted by absolute difference (biggest flip first)
+   ------------------------------------------------------------------ */
+document.getElementById('format-tbody').innerHTML = format
+  .sort((a, b) => Math.abs(b.v3 - b.v2) - Math.abs(a.v3 - a.v2))
+  .map(d => {
+    const diff = Math.round((d.v3 - d.v2) * 10) / 10;
+    const badge = diff > 5
+      ? `<span class="badge bg">+${diff}% in 3v3</span>`
+      : diff < -5
+        ? `<span class="badge br">${diff}% in 3v3</span>`
+        : '<span class="badge bi">consistent</span>';
+    return `<tr>
+      <td style="font-weight:500">${d.p}</td>
+      <td style="color:${pctColor(d.v2)}">${d.v2}%</td>
+      <td style="color:${pctColor(d.v3)}">${d.v3}%</td>
+      <td style="font-weight:500">${diff > 0 ? '+' : ''}${diff}%</td>
+      <td>${badge}</td>
+    </tr>`;
+  }).join('');
+
+
+/* ------------------------------------------------------------------
+   BUILD: most common scores
+   ------------------------------------------------------------------ */
+document.getElementById('score-tbody').innerHTML = scores
+  .map(d => `<tr><td style="font-weight:500">${d.s}</td><td>${d.n}</td></tr>`)
+  .join('');
+
+
+/* ------------------------------------------------------------------
+   BUILD: avg margin per player
+   ------------------------------------------------------------------ */
+document.getElementById('margin-tbody').innerHTML = margins
+  .sort((a, b) => b.wm - a.wm)
+  .map(d => {
+    const style = d.wm > d.lm + 1
+      ? '<span class="badge bg">dominant winner</span>'
+      : d.lm > d.wm + 1
+        ? '<span class="badge br">close in losses</span>'
+        : '<span class="badge bi">balanced</span>';
+    return `<tr>
+      <td style="font-weight:500">${d.p}</td>
+      <td>${d.wm} pts</td>
+      <td>${d.lm} pts</td>
+      <td>${style}</td>
+    </tr>`;
+  }).join('');
+
+
+/* ------------------------------------------------------------------
+   BUILD: over-rule table
+   ------------------------------------------------------------------ */
+document.getElementById('over-tbody').innerHTML = over
+  .sort((a, b) => (b.bad / b.total) - (a.bad / a.total))
+  .map(d => {
+    const pct = Math.round(d.bad / d.total * 100 * 10) / 10;
+    return `<tr>
+      <td style="font-weight:500">${d.p}</td>
+      <td>${d.bad}</td>
+      <td>${d.total}</td>
+      <td style="font-weight:500;color:${pct >= 40 ? '#991b1b' : pct >= 30 ? '#92400e' : '#065f46'}">${pct}%</td>
+      <td>
+        <div class="bar-wrap">
+          <div class="bar-bg">
+            <div class="bar-fill" style="width:${pct * 2}%;background:${pct >= 40 ? '#E24B4A' : pct >= 30 ? '#EF9F27' : '#639922'}"></div>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+
+/* ------------------------------------------------------------------
+   TAB SWITCHER
+   Re-renders the trend chart when switching to that tab
+   (charts in hidden divs don't size correctly until visible)
+   ------------------------------------------------------------------ */
+function showTab(name, btn) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'trends') { renderTrend(); renderAllDots(); }
+}
+
+
+/* ------------------------------------------------------------------
+   INIT — render on page load
+   ------------------------------------------------------------------ */
+renderTrend();
+renderAllDots();
+
+</script>
+</body>
+</html>

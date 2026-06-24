@@ -1,0 +1,3407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hoopstats — local prototype</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  .stat-input {
+    width: 3.25rem; text-align: center; padding: 0.3rem 0.25rem; font-size: 0.875rem;
+    border: 1px solid #d1d5db; border-radius: 0.25rem; background: white;
+  }
+  .stat-input:focus { border-color: #2563eb; outline: none; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+  .nav-btn { padding: 0.4rem 0.75rem; border-radius: 0.375rem; font-size: 0.875rem; color: #4b5563; }
+  .nav-btn:hover { background: #f3f4f6; }
+  .nav-btn.active { background: #1d4ed8; color: white; }
+  .nav-btn.active:hover { background: #1e40af; }
+  .field-label { font-size: 0.7rem; color: #6b7280; font-weight: 500; }
+  .section-h { font-size: 0.7rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+<header class="bg-white border-b border-gray-200 sticky top-0 z-10">
+  <div class="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+    <h1 class="text-xl font-semibold">🏀 Hoopstats</h1>
+    <span class="text-xs text-gray-400">local prototype</span>
+    <nav class="flex gap-1 ml-auto flex-wrap" id="nav"></nav>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto px-4 py-6" id="app"></main>
+
+<script>
+// ============================================================
+// State & persistence
+// ============================================================
+const STATE_KEY = 'hoopstats_v1';
+const SNAPSHOTS_KEY = 'hoopstats_snapshots_v1';
+const SNAPSHOT_CAP = 10;
+const SCHEMA_VERSION = 1;
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STATE_KEY);
+    if (!raw) return { players: [], games: [], seasons: [] };
+    const parsed = JSON.parse(raw);
+    return {
+      players: Array.isArray(parsed.players) ? parsed.players : [],
+      games:   Array.isArray(parsed.games)   ? parsed.games   : [],
+      seasons: Array.isArray(parsed.seasons) ? parsed.seasons : [],
+    };
+  } catch (e) {
+    console.warn('failed to load state:', e);
+    return { players: [], games: [], seasons: [] };
+  }
+}
+
+function loadSnapshots() {
+  try {
+    const raw = localStorage.getItem(SNAPSHOTS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('failed to load snapshots:', e);
+    return [];
+  }
+}
+
+function saveSnapshots(list) {
+  try {
+    localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.warn('failed to save snapshots:', e);
+  }
+}
+
+function pushSnapshot(label) {
+  const list = loadSnapshots();
+  list.unshift({
+    id: 'snap_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+    ts: Date.now(),
+    label: label || 'auto',
+    games: state.games.length,
+    players: state.players.length,
+    state: JSON.parse(JSON.stringify(state)),
+  });
+  while (list.length > SNAPSHOT_CAP) list.pop();
+  saveSnapshots(list);
+}
+
+function seasonName(seasonId) {
+  if (!seasonId) return 'No season';
+  const s = state.seasons.find(x => x.id === seasonId);
+  return s ? s.name : 'Unknown season';
+}
+
+function saveState(opts) {
+  localStorage.setItem(STATE_KEY, JSON.stringify(state));
+  // push a snapshot on every save unless explicitly disabled (e.g. during a restore)
+  if (!opts || opts.snapshot !== false) {
+    pushSnapshot((opts && opts.label) || 'auto');
+  }
+}
+
+let state = loadState();
+let view = { name: 'players' };
+let chart = null;
+
+function uid() {
+  return 'id_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+const COLORS = [
+  '#1a56db', '#dc2626', '#16a34a', '#ea580c', '#9333ea',
+  '#0891b2', '#ca8a04', '#be185d', '#0f766e', '#4338ca',
+];
+
+// ============================================================
+// Stat shape normalization (handles old + new schemas)
+// ============================================================
+function statShape(stat, game) {
+  const scoring = (game && game.scoring) || '1-2';
+  const shortVal = scoring === '1-2' ? 1 : 2;
+  const longVal  = scoring === '1-2' ? 2 : 3;
+  const isNew =
+    stat.shortMade !== undefined || stat.longMade !== undefined ||
+    stat.shortAtt  !== undefined || stat.longAtt  !== undefined ||
+    stat.offReb    !== undefined || stat.defReb   !== undefined;
+
+  if (isNew) {
+    const sm  = +stat.shortMade      || 0;
+    const sa  = +stat.shortAtt       || 0;
+    const lm  = +stat.longMade       || 0;
+    const la  = +stat.longAtt        || 0;
+    const csm = +stat.contShortMade  || 0;
+    const csa = +stat.contShortAtt   || 0;
+    const clm = +stat.contLongMade   || 0;
+    const cla = +stat.contLongAtt    || 0;
+    const oreb = +stat.offReb || 0;
+    const dreb = +stat.defReb || 0;
+    // Zone shots (separate breakdown — do NOT roll up into short/long FG%)
+    const zcm = +stat.zoneCloseMade || 0;
+    const zca = +stat.zoneCloseAtt  || 0;
+    const zmm = +stat.zoneMidMade   || 0;
+    const zma = +stat.zoneMidAtt    || 0;
+    const zlm = +stat.zoneLongMade  || 0;
+    const zla = +stat.zoneLongAtt   || 0;
+    const czcm = +stat.contZoneCloseMade || 0;
+    const czca = +stat.contZoneCloseAtt  || 0;
+    const czmm = +stat.contZoneMidMade   || 0;
+    const czma = +stat.contZoneMidAtt    || 0;
+    const czlm = +stat.contZoneLongMade  || 0;
+    const czla = +stat.contZoneLongAtt   || 0;
+    return {
+      shortMade: sm, shortAtt: sa,
+      longMade:  lm, longAtt:  la,
+      contShortMade: csm, contShortAtt: csa,
+      contLongMade:  clm, contLongAtt:  cla,
+      contMade: csm + clm,
+      contAtt:  csa + cla,
+      offReb: oreb, defReb: dreb,
+      reb: oreb + dreb,
+      fgm: sm + lm,
+      fga: sa + la,
+      points: sm * shortVal + lm * longVal,
+      ast: +stat.ast || 0,
+      stl: +stat.stl || 0,
+      blk: +stat.blk || 0,
+      to:  +stat.to  || 0,
+      // Zones (parallel, do not affect fgm/fga/points)
+      zoneCloseMade: zcm, zoneCloseAtt: zca,
+      zoneMidMade:   zmm, zoneMidAtt:   zma,
+      zoneLongMade:  zlm, zoneLongAtt:  zla,
+      contZoneCloseMade: czcm, contZoneCloseAtt: czca,
+      contZoneMidMade:   czmm, contZoneMidAtt:   czma,
+      contZoneLongMade:  czlm, contZoneLongAtt:  czla,
+      shortVal, longVal,
+      isNew: true,
+    };
+  }
+  return {
+    shortMade: 0, shortAtt: 0, longMade: 0, longAtt: 0,
+    contShortMade: 0, contShortAtt: 0, contLongMade: 0, contLongAtt: 0,
+    contMade: 0, contAtt: 0,
+    offReb: 0, defReb: 0,
+    reb: +stat.reb || 0,
+    fgm: +stat.fgm || 0,
+    fga: +stat.fga || 0,
+    points: +stat.points || 0,
+    ast: +stat.ast || 0,
+    stl: +stat.stl || 0,
+    blk: +stat.blk || 0,
+    to:  +stat.to  || 0,
+    zoneCloseMade: 0, zoneCloseAtt: 0,
+    zoneMidMade:   0, zoneMidAtt:   0,
+    zoneLongMade:  0, zoneLongAtt:  0,
+    contZoneCloseMade: 0, contZoneCloseAtt: 0,
+    contZoneMidMade:   0, contZoneMidAtt:   0,
+    contZoneLongMade:  0, contZoneLongAtt:  0,
+    shortVal, longVal,
+    isNew: false,
+  };
+}
+
+function teamTotals(game, team) {
+  const rows = game.stats.filter(s => s.team === team);
+  let pts=0, fgm=0, fga=0, reb=0, ast=0, stl=0, blk=0, to=0, contMade=0, contAtt=0, oreb=0, dreb=0;
+  for (const r of rows) {
+    const s = statShape(r, game);
+    pts += s.points; fgm += s.fgm; fga += s.fga; reb += s.reb;
+    ast += s.ast;    stl += s.stl; blk += s.blk; to  += s.to;
+    contMade += s.contMade; contAtt += s.contAtt;
+    oreb += s.offReb; dreb += s.defReb;
+  }
+  return { pts, fgm, fga, reb, ast, stl, blk, to, contMade, contAtt, oreb, dreb, tracked: getTracked(game) };
+}
+
+// What stat groups did this game track?
+// Default to all tracked (true) — preserves behavior for any pre-existing saved games.
+function getTracked(game) {
+  if (!game || !game.tracked) {
+    // Legacy games had no `tracked` field — assume the standard groups were tracked, but
+    // zones could NOT have been since the feature didn't exist yet.
+    return { contested: true, rebounds: true, ast: true, stl: true, blk: true, to: true, zones: false };
+  }
+  return {
+    contested: game.tracked.contested !== false,
+    rebounds: game.tracked.rebounds !== false,
+    ast: game.tracked.ast !== false,
+    stl: game.tracked.stl !== false,
+    blk: game.tracked.blk !== false,
+    to: game.tracked.to !== false,
+    zones: game.tracked.zones === true, // opt-in (strict)
+  };
+}
+
+// Game category: 'rec' (pickup, 1v1/2v2/3v3...) or 'sanctioned' (refereed 5v5, your team only).
+// Legacy games had no `category` field — treat them as recreational.
+function getCategory(game) {
+  return (game && game.category === 'sanctioned') ? 'sanctioned' : 'rec';
+}
+// Who won? Uses an explicit winner override when set, otherwise derives from score.
+// Returns 'A', 'B', or 'Tie'.
+function getWinner(game) {
+  if (game.winner === 'A' || game.winner === 'B' || game.winner === 'Tie') return game.winner;
+  if (game.scoreA === game.scoreB) return 'Tie';
+  return game.scoreA > game.scoreB ? 'A' : 'B';
+}
+// Parse the per-side player count from a format like "3v3" → 3 (null if unknown).
+function perSideCount(format) {
+  const m = /^(\d+)v(\d+)$/.exec(format || '');
+  return m ? parseInt(m[1], 10) : null;
+}
+
+const NA_HTML = '<span class="text-gray-400 italic">N/A</span>';
+function naOr(isTracked, formatted) {
+  return isTracked ? formatted : NA_HTML;
+}
+
+// ============================================================
+// Navigation
+// ============================================================
+function go(next) {
+  view = next;
+  if (chart) { chart.destroy(); chart = null; }
+  render();
+  window.scrollTo(0, 0);
+}
+
+function renderNav() {
+  const nav = document.getElementById('nav');
+  const tabs = [
+    { id: 'players', label: 'Players' },
+    { id: 'log',     label: 'Log game' },
+    { id: 'games',   label: 'Games' },
+    { id: 'import',  label: 'Import' },
+    { id: 'backup',  label: 'Backup' },
+  ];
+  nav.innerHTML = tabs.map(t =>
+    `<button type="button" class="nav-btn ${view.name === t.id ? 'active' : ''}" data-go="${t.id}">${t.label}</button>`
+  ).join('');
+  nav.querySelectorAll('button[data-go]').forEach(btn => {
+    btn.addEventListener('click', () => go({ name: btn.dataset.go }));
+  });
+}
+
+function render() {
+  renderNav();
+  const app = document.getElementById('app');
+  if      (view.name === 'players') app.innerHTML = renderPlayers();
+  else if (view.name === 'log')     app.innerHTML = renderLogGame();
+  else if (view.name === 'games')   app.innerHTML = renderGames();
+  else if (view.name === 'player')  app.innerHTML = renderPlayerDetail(view.playerId);
+  else if (view.name === 'import')  app.innerHTML = renderImport();
+  else if (view.name === 'backup')  app.innerHTML = renderBackup();
+  else app.innerHTML = '<p>Unknown view.</p>';
+
+  if      (view.name === 'players') wirePlayers();
+  else if (view.name === 'log')     wireLogGame();
+  else if (view.name === 'games')   wireGames();
+  else if (view.name === 'player')  wirePlayerDetail(view.playerId);
+  else if (view.name === 'import')  wireImport();
+  else if (view.name === 'backup')  wireBackup();
+}
+
+// ============================================================
+// VIEW: Players
+// ============================================================
+function renderPlayers() {
+  const playerCards = state.players.length === 0
+    ? `<div class="border border-dashed border-gray-300 rounded-lg p-8 text-center text-sm text-gray-600">
+         No players yet. Add one above to start logging games.
+       </div>`
+    : `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+         ${state.players.map(p => {
+           const games = playerGames(p.id);
+           return `
+           <div class="bg-white border border-gray-200 rounded-lg p-4 flex items-center gap-3">
+             <span class="w-10 h-10 rounded-full inline-flex items-center justify-center font-semibold text-sm shrink-0"
+                   style="background:${p.color}20; color:${p.color};">
+               ${escapeHtml(p.abbr || p.name.slice(0,2).toUpperCase())}
+             </span>
+             <div class="flex-1 min-w-0">
+               <div class="font-medium truncate">${escapeHtml(p.name)}</div>
+               <div class="text-xs text-gray-500">${games.length} game${games.length===1?'':'s'}</div>
+             </div>
+             <button type="button" class="text-xs text-blue-700 hover:underline" data-view-player="${p.id}">Stats →</button>
+             <button type="button" class="text-xs text-gray-400 hover:text-red-600" data-delete-player="${p.id}" title="Delete player">×</button>
+           </div>`;
+         }).join('')}
+       </div>`;
+
+  return `
+    <div class="space-y-6">
+      <section class="bg-white border border-gray-200 rounded-lg p-4">
+        <h2 class="text-sm font-semibold mb-3">Add player</h2>
+        <form id="add-player-form" class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+          <label class="text-xs text-gray-600 sm:col-span-5">
+            Name
+            <input name="name" required class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm" placeholder="e.g. RJ">
+          </label>
+          <label class="text-xs text-gray-600 sm:col-span-2">
+            Initials
+            <input name="abbr" maxlength="3" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm" placeholder="RJ">
+          </label>
+          <label class="text-xs text-gray-600 sm:col-span-3">
+            Color
+            <input name="color" type="color" value="${COLORS[state.players.length % COLORS.length]}" class="mt-1 w-full h-9 border border-gray-300 rounded">
+          </label>
+          <button type="submit" class="sm:col-span-2 bg-blue-700 text-white rounded px-3 py-2 text-sm font-medium hover:bg-blue-800">Add</button>
+        </form>
+      </section>
+
+      <section>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold">Roster</h2>
+          <span class="text-xs text-gray-500">${state.players.length} player${state.players.length===1?'':'s'}</span>
+        </div>
+        ${playerCards}
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-4">
+        <h2 class="text-sm font-semibold mb-2">Seasons</h2>
+        <p class="text-xs text-gray-500 mb-3">Tag games by season so you can compare stretches of time. Existing games stay untagged unless you edit them.</p>
+        <form id="add-season-form" class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end mb-3">
+          <label class="text-xs text-gray-600 sm:col-span-10">
+            New season name
+            <input name="name" required class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm" placeholder="e.g. Summer 2026">
+          </label>
+          <button type="submit" class="sm:col-span-2 bg-blue-700 text-white rounded px-3 py-2 text-sm font-medium hover:bg-blue-800">Add</button>
+        </form>
+        ${state.seasons.length === 0
+          ? `<div class="text-xs text-gray-500 italic">No seasons yet.</div>`
+          : `<ul class="divide-y divide-gray-100 border border-gray-200 rounded">
+              ${state.seasons.map(s => {
+                const count = state.games.filter(g => g.seasonId === s.id).length;
+                return `
+                  <li class="flex items-center gap-3 px-3 py-2 text-sm">
+                    <span class="flex-1 font-medium truncate">${escapeHtml(s.name)}</span>
+                    <span class="text-xs text-gray-500">${count} game${count===1?'':'s'}</span>
+                    <button type="button" class="text-xs text-gray-400 hover:text-red-600" data-delete-season="${s.id}" title="Delete season">×</button>
+                  </li>`;
+              }).join('')}
+            </ul>`}
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-4">
+        <h2 class="text-sm font-semibold mb-2">Backup &amp; restore</h2>
+        <p class="text-xs text-gray-500 mb-3">
+          All your data lives in your browser's local storage on this device only. Export a JSON file as a backup or to move data to another browser/computer.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="export-btn" class="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50">⬇ Export JSON</button>
+          <button type="button" id="import-btn" class="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50">⬆ Import JSON</button>
+          <input type="file" id="import-file" accept="application/json" class="hidden">
+          <button type="button" id="reset-btn" class="text-sm border border-red-200 text-red-700 rounded px-3 py-1.5 hover:bg-red-50 ml-auto">Erase all data</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function wirePlayers() {
+  const form = document.getElementById('add-player-form');
+  if (form) {
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const name = String(fd.get('name') || '').trim();
+      if (!name) return;
+      const abbr = String(fd.get('abbr') || '').trim().toUpperCase().slice(0, 3) || name.slice(0, 2).toUpperCase();
+      const color = String(fd.get('color') || COLORS[0]);
+      state.players.push({ id: uid(), name, abbr, color, createdAt: new Date().toISOString() });
+      saveState();
+      render();
+    });
+  }
+
+  document.querySelectorAll('button[data-view-player]').forEach(btn => {
+    btn.addEventListener('click', () => go({ name: 'player', playerId: btn.dataset.viewPlayer }));
+  });
+
+  const seasonForm = document.getElementById('add-season-form');
+  if (seasonForm) {
+    seasonForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const name = String(fd.get('name') || '').trim();
+      if (!name) return;
+      state.seasons.push({ id: uid(), name, createdAt: new Date().toISOString() });
+      saveState();
+      render();
+    });
+  }
+
+  document.querySelectorAll('button[data-delete-season]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.deleteSeason;
+      const s = state.seasons.find(x => x.id === id);
+      const used = state.games.some(g => g.seasonId === id);
+      const msg = used
+        ? `Delete season "${s?.name}"? ${state.games.filter(g => g.seasonId === id).length} game(s) will become untagged (no season). Games are NOT deleted.`
+        : `Delete season "${s?.name}"?`;
+      if (!confirm(msg)) return;
+      state.seasons = state.seasons.filter(x => x.id !== id);
+      state.games = state.games.map(g => g.seasonId === id ? { ...g, seasonId: null } : g);
+      saveState();
+      render();
+    });
+  });
+
+  document.querySelectorAll('button[data-delete-player]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.deletePlayer;
+      const p = state.players.find(x => x.id === id);
+      const used = state.games.some(g => g.stats.some(s => s.playerId === id));
+      const msg = used
+        ? `Delete ${p?.name}? They appear in past games — those rows will be removed too.`
+        : `Delete ${p?.name}?`;
+      if (!confirm(msg)) return;
+      state.players = state.players.filter(x => x.id !== id);
+      state.games = state.games.map(g => ({ ...g, stats: g.stats.filter(s => s.playerId !== id) }));
+      saveState();
+      render();
+    });
+  });
+
+  const exportBtn = document.getElementById('export-btn');
+  if (exportBtn) exportBtn.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `hoopstats-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  const fileInput = document.getElementById('import-file');
+  const importBtn = document.getElementById('import-btn');
+  if (importBtn && fileInput) {
+    importBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        if (!parsed || !Array.isArray(parsed.players) || !Array.isArray(parsed.games)) {
+          alert("That file doesn't look like a Hoopstats export.");
+          return;
+        }
+        const seasons = Array.isArray(parsed.seasons) ? parsed.seasons : [];
+        if (!confirm(`Replace your current data with ${parsed.players.length} players, ${parsed.games.length} games, ${seasons.length} season${seasons.length===1?'':'s'}?`)) return;
+        state = { players: parsed.players, games: parsed.games, seasons };
+        saveState();
+        render();
+      } catch (e) {
+        alert('Could not read that file: ' + e.message);
+      }
+    });
+  }
+
+  const resetBtn = document.getElementById('reset-btn');
+  if (resetBtn) resetBtn.addEventListener('click', () => {
+    if (!confirm('Erase ALL players, games, and seasons? This cannot be undone (unless you have an export).')) return;
+    state = { players: [], games: [], seasons: [] };
+    saveState();
+    render();
+  });
+}
+
+// ============================================================
+// VIEW: Log game
+// ============================================================
+let logForm = null;
+
+function newDraft() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  // Default seasonId to most recently created season, if any.
+  const defaultSeasonId = state.seasons.length > 0
+    ? [...state.seasons].sort((a, b) => +new Date(b.createdAt || 0) - +new Date(a.createdAt || 0))[0].id
+    : null;
+  return {
+    playedAt: now.toISOString().slice(0, 10),
+    gameOrder: '',
+    durationMinutes: '',
+    winner: '',
+    trackQuarters: false,
+    activeQuarter: 1,
+    category: 'rec',
+    format: '2v2',
+    scoring: '1-2',
+    ruleScore: 21,
+    scoreA: '',
+    scoreB: '',
+    notes: '',
+    seasonId: defaultSeasonId,
+    tracked: { contested: true, rebounds: true, ast: true, stl: true, blk: true, to: true, zones: false },
+    rows: [emptyStatRow('A'), emptyStatRow('B')],
+  };
+}
+
+// Reconstruct a logForm draft from a previously saved game (for editing).
+function gameToLogForm(game) {
+  // Convert stored ISO timestamp → local YYYY-MM-DD for the date input.
+  const d = new Date(game.playedAt);
+  const playedAt = [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, '0'),
+    String(d.getDate()).padStart(2, '0'),
+  ].join('-');
+
+  const tr = getTracked(game);
+
+  const rows = game.stats.map(stat => {
+    const row = emptyStatRow(stat.team);
+    row.playerId = stat.playerId;
+    // Copy all known stat fields (QUARTER_STAT_KEYS covers every shooting/reb/other field).
+    for (const k of QUARTER_STAT_KEYS) {
+      if (stat[k] !== undefined) row[k] = stat[k];
+    }
+    // Restore quarter breakdowns if the game was logged with quarter tracking.
+    if (stat.quarterStats && Array.isArray(stat.quarterStats) && stat.quarterStats.length === 4) {
+      row.quarters = stat.quarterStats.map(q => ({ ...emptyQuarterStats(), ...q }));
+    }
+    return row;
+  });
+
+  return {
+    editingGameId: game.id,
+    playedAt,
+    gameOrder: game.order != null ? String(game.order) : '',
+    durationMinutes: game.durationMinutes != null ? String(game.durationMinutes) : '',
+    winner: game.winner || '',
+    trackQuarters: !!game.trackQuarters,
+    activeQuarter: 1,
+    category: game.category === 'sanctioned' ? 'sanctioned' : 'rec',
+    format: game.format || '2v2',
+    scoring: game.scoring || '1-2',
+    ruleScore: game.ruleScore != null ? game.ruleScore : 21,
+    scoreA: game.scoreA != null ? game.scoreA : '',
+    scoreB: game.scoreB != null ? game.scoreB : '',
+    notes: game.notes || '',
+    seasonId: game.seasonId || null,
+    tracked: {
+      contested: !!tr.contested, rebounds: !!tr.rebounds,
+      ast: !!tr.ast, stl: !!tr.stl, blk: !!tr.blk, to: !!tr.to, zones: !!tr.zones,
+    },
+    rows,
+  };
+}
+
+const TRACK_GROUPS = [
+  { key: 'contested', label: 'Contested shots' },
+  { key: 'rebounds',  label: 'Rebounds' },
+  { key: 'ast',       label: 'Assists' },
+  { key: 'stl',       label: 'Steals' },
+  { key: 'blk',       label: 'Blocks' },
+  { key: 'to',        label: 'Turnovers' },
+  { key: 'zones',     label: 'Shot zones (close/mid/long)' },
+];
+
+function emptyQuarterStats() {
+  return {
+    shortMade: 0, shortAtt: 0,
+    longMade: 0,  longAtt: 0,
+    contShortMade: 0, contShortAtt: 0,
+    contLongMade: 0,  contLongAtt: 0,
+    offReb: 0, defReb: 0,
+    ast: 0, stl: 0, blk: 0, to: 0,
+    zoneCloseMade: 0, zoneCloseAtt: 0,
+    zoneMidMade: 0,   zoneMidAtt: 0,
+    zoneLongMade: 0,  zoneLongAtt: 0,
+    contZoneCloseMade: 0, contZoneCloseAtt: 0,
+    contZoneMidMade: 0,   contZoneMidAtt: 0,
+    contZoneLongMade: 0,  contZoneLongAtt: 0,
+  };
+}
+
+const QUARTER_STAT_KEYS = [
+  'shortMade','shortAtt','longMade','longAtt',
+  'contShortMade','contShortAtt','contLongMade','contLongAtt',
+  'offReb','defReb','ast','stl','blk','to',
+  'zoneCloseMade','zoneCloseAtt','zoneMidMade','zoneMidAtt','zoneLongMade','zoneLongAtt',
+  'contZoneCloseMade','contZoneCloseAtt','contZoneMidMade','contZoneMidAtt','contZoneLongMade','contZoneLongAtt',
+];
+
+function recomputeRowTotals(i) {
+  const row = logForm.rows[i];
+  if (!row || !row.quarters) return;
+  for (const k of QUARTER_STAT_KEYS) {
+    row[k] = row.quarters.reduce((sum, q) => sum + n(q[k]), 0);
+  }
+}
+
+function getDisplaySrc(row) {
+  if (logForm && logForm.trackQuarters && logForm.category === 'sanctioned' &&
+      logForm.activeQuarter > 0 && row.quarters) {
+    return row.quarters[logForm.activeQuarter - 1];
+  }
+  return row;
+}
+
+function emptyStatRow(team) {
+  return {
+    rid: uid(),
+    playerId: '',
+    team,
+    shortMade: '', shortAtt: '',
+    longMade: '',  longAtt: '',
+    contShortMade: '', contShortAtt: '',
+    contLongMade:  '', contLongAtt:  '',
+    offReb: '', defReb: '',
+    ast: '', stl: '', blk: '', to: '',
+    // Shot zones (parallel breakdown — does not affect short/long FG%)
+    zoneCloseMade: '', zoneCloseAtt: '',
+    zoneMidMade:   '', zoneMidAtt:   '',
+    zoneLongMade:  '', zoneLongAtt:  '',
+    contZoneCloseMade: '', contZoneCloseAtt: '',
+    contZoneMidMade:   '', contZoneMidAtt:   '',
+    contZoneLongMade:  '', contZoneLongAtt:  '',
+    quarters: [emptyQuarterStats(), emptyQuarterStats(), emptyQuarterStats(), emptyQuarterStats()],
+  };
+}
+
+// Coerce stat-input values (which may be '' while typing) to a finite number.
+function n(x) {
+  const v = +x;
+  return Number.isFinite(v) ? v : 0;
+}
+
+function pointValues(scoring) {
+  return scoring === '2-3' ? { short: 2, long: 3 } : { short: 1, long: 2 };
+}
+
+function rowDerived(row, scoring) {
+  const v = pointValues(scoring);
+  const fgm = n(row.shortMade) + n(row.longMade);
+  const fga = n(row.shortAtt) + n(row.longAtt);
+  const points = n(row.shortMade) * v.short + n(row.longMade) * v.long;
+  const reb = n(row.offReb) + n(row.defReb);
+  return { fgm, fga, points, reb };
+}
+
+function computeDraftTotals(draft, team) {
+  const v = pointValues(draft.scoring);
+  let pts=0, fgm=0, fga=0, reb=0;
+  for (const r of draft.rows) {
+    if (r.team !== team || !r.playerId) continue;
+    pts += n(r.shortMade) * v.short + n(r.longMade) * v.long;
+    fgm += n(r.shortMade) + n(r.longMade);
+    fga += n(r.shortAtt)  + n(r.longAtt);
+    reb += n(r.offReb) + n(r.defReb);
+  }
+  return { pts, fgm, fga, reb };
+}
+
+function renderLogGame() {
+  if (!logForm) logForm = newDraft();
+
+  if (state.players.length < 1) {
+    return `
+      <div class="border border-dashed border-gray-300 rounded-lg p-8 text-center text-sm text-gray-600 space-y-3">
+        <div>You need at least 1 player before logging a game.</div>
+        <button type="button" class="bg-blue-700 text-white rounded px-3 py-1.5 text-sm hover:bg-blue-800" data-go="players">Add players</button>
+      </div>
+    `;
+  }
+
+  const v = pointValues(logForm.scoring);
+  const shortLabel = `${v.short}PT`;
+  const longLabel  = `${v.long}PT`;
+  const tr = logForm.tracked;
+  const sanctioned = (logForm.category === 'sanctioned');
+  const perSide = perSideCount(logForm.format);
+
+  const teamTotalsForA = computeDraftTotals(logForm, 'A');
+  const teamTotalsForB = computeDraftTotals(logForm, 'B');
+
+  const cardForRow = (row, i) => {
+    const d = rowDerived(row, logForm.scoring);
+    const fgPct = d.fga ? (d.fgm / d.fga * 100).toFixed(1) + '%' : '–';
+    const otherFields = [
+      { k: 'ast', label: 'AST', on: tr.ast },
+      { k: 'stl', label: 'STL', on: tr.stl },
+      { k: 'blk', label: 'BLK', on: tr.blk },
+      { k: 'to',  label: 'TO',  on: tr.to  },
+    ].filter(f => f.on);
+    return `
+      <div class="bg-white border border-gray-200 rounded-lg p-3 space-y-3" data-row-i="${i}">
+        <div class="flex items-center gap-2 flex-wrap">
+          <select data-field="playerId" class="flex-1 min-w-[10rem] border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">— pick player —</option>
+            ${state.players.map(p => {
+              const taken = logForm.rows.some((o, oi) => oi !== i && o.playerId === p.id);
+              return `<option value="${p.id}" ${row.playerId === p.id ? 'selected' : ''} ${taken && row.playerId !== p.id ? 'disabled' : ''}>${escapeHtml(p.name)}</option>`;
+            }).join('')}
+          </select>
+          <span class="text-sm text-gray-500 tabular-nums whitespace-nowrap">
+            <span class="font-medium text-gray-800" data-pts>${d.points}</span> pts ·
+            <span data-fg>${d.fgm}/${d.fga}</span> FG (<span data-fgpct>${fgPct}</span>)
+          </span>
+          <button type="button" class="text-gray-400 hover:text-red-600 text-lg leading-none px-1 ml-auto" data-remove-row title="Remove">×</button>
+        </div>
+
+        <div>
+          <div class="section-h mb-1.5">Shooting</div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-14">${shortLabel}</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="shortMade" value="${row.shortMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="shortAtt"  value="${row.shortAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-14">${longLabel}</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="longMade" value="${row.longMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="longAtt"  value="${row.longAtt}"  class="stat-input">
+            </div>
+            ${tr.contested ? `
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-14">Cont. ${shortLabel}</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="contShortMade" value="${row.contShortMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="contShortAtt"  value="${row.contShortAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-14">Cont. ${longLabel}</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="contLongMade" value="${row.contLongMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="contLongAtt"  value="${row.contLongAtt}"  class="stat-input">
+            </div>
+            ` : `
+            <div class="text-xs text-gray-400 italic md:col-span-2">Contested shots — N/A this game</div>
+            `}
+          </div>
+        </div>
+
+        ${tr.zones ? `
+        <div>
+          <div class="section-h mb-1.5">Shot zones <span class="text-[10px] font-normal text-gray-400 normal-case tracking-normal">(parallel breakdown — doesn't change FG% above)</span></div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-20">Close</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="zoneCloseMade" value="${row.zoneCloseMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="zoneCloseAtt"  value="${row.zoneCloseAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-20">Cont. Close</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="contZoneCloseMade" value="${row.contZoneCloseMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="contZoneCloseAtt"  value="${row.contZoneCloseAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-20">Mid</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="zoneMidMade" value="${row.zoneMidMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="zoneMidAtt"  value="${row.zoneMidAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-20">Cont. Mid</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="contZoneMidMade" value="${row.contZoneMidMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="contZoneMidAtt"  value="${row.contZoneMidAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-20">Long</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="zoneLongMade" value="${row.zoneLongMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="zoneLongAtt"  value="${row.zoneLongAtt}"  class="stat-input">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="field-label w-20">Cont. Long</span>
+              <span class="text-[10px] text-gray-400">M</span>
+              <input type="number" min="0" data-field="contZoneLongMade" value="${row.contZoneLongMade}" class="stat-input">
+              <span class="text-[10px] text-gray-400">A</span>
+              <input type="number" min="0" data-field="contZoneLongAtt"  value="${row.contZoneLongAtt}"  class="stat-input">
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
+        ${tr.rebounds ? `
+        <div>
+          <div class="section-h mb-1.5">Rebounds</div>
+          <div class="flex flex-wrap items-center gap-3">
+            <label class="flex items-center gap-1.5">
+              <span class="field-label">OFF</span>
+              <input type="number" min="0" data-field="offReb" value="${row.offReb}" class="stat-input">
+            </label>
+            <label class="flex items-center gap-1.5">
+              <span class="field-label">DEF</span>
+              <input type="number" min="0" data-field="defReb" value="${row.defReb}" class="stat-input">
+            </label>
+            <span class="text-xs text-gray-500">Total: <span data-reb>${d.reb}</span></span>
+          </div>
+        </div>
+        ` : `
+        <div>
+          <div class="section-h mb-1.5">Rebounds</div>
+          <div class="text-xs text-gray-400 italic">N/A this game</div>
+        </div>
+        `}
+
+        ${otherFields.length > 0 ? `
+        <div>
+          <div class="section-h mb-1.5">Other</div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            ${otherFields.map(f => `
+              <label class="flex items-center gap-1.5">
+                <span class="field-label uppercase">${f.label}</span>
+                <input type="number" min="0" data-field="${f.k}" value="${row[f.k]}" class="stat-input">
+              </label>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
+      </div>
+    `;
+  };
+
+  const teamSection = (team) => {
+    const teamRows = logForm.rows.map((r, i) => ({ r, i })).filter(({r}) => r.team === team);
+    const totals = team === 'A' ? teamTotalsForA : teamTotalsForB;
+    const finalScore = team === 'A' ? logForm.scoreA : logForm.scoreB;
+    const teamLabel = sanctioned ? 'Your team' : `Team ${team}`;
+    return `
+      <section>
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <h2 class="text-sm font-semibold">
+            ${teamLabel}
+            <span class="text-gray-500 font-normal" data-team-final-${team}>(final ${finalScore === '' ? '—' : finalScore} pts)</span>
+          </h2>
+          <div class="text-xs text-gray-500">
+            Auto: <span class="tabular-nums" data-team-pts="${team}">${totals.pts}</span> pts ·
+            <span data-team-fg="${team}">${totals.fgm}/${totals.fga}</span> FG ·
+            <span data-team-reb="${team}">${totals.reb}</span> reb
+          </div>
+          <button type="button" class="text-xs text-blue-700 hover:underline" data-add-row="${team}">${sanctioned ? '+ Add teammate to track' : '+ Add player'}</button>
+        </div>
+        ${teamRows.length === 0
+          ? `<div class="border border-dashed border-gray-300 rounded-lg p-4 text-center text-xs text-gray-500">No players on this team yet.</div>`
+          : `<div class="space-y-3">${teamRows.map(({r, i}) => cardForRow(r, i)).join('')}</div>`}
+      </section>
+    `;
+  };
+
+  return `
+    <form id="log-form" class="space-y-6">
+      ${logForm.editingGameId ? `
+      <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-center gap-2">
+        <span class="font-semibold">Editing game</span>
+        <span class="text-amber-600">— make your changes below and click Update game to save.</span>
+      </div>
+      ` : ''}
+      <section class="grid grid-cols-2 md:grid-cols-6 gap-3 bg-white border border-gray-200 rounded-lg p-4">
+        ${(() => {
+          // Count games already logged on this date (excluding the one being edited).
+          const gamesOnDate = state.games.filter(g =>
+            g.playedAt.slice(0, 10) === logForm.playedAt &&
+            g.id !== (logForm.editingGameId || null)
+          ).length;
+          const suggestedOrder = gamesOnDate + 1;
+          const orderVal = logForm.gameOrder !== '' ? logForm.gameOrder : suggestedOrder;
+          return `
+        <label class="text-xs text-gray-600">
+          Date
+          <input type="date" data-meta="playedAt" value="${logForm.playedAt}" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>
+        <label class="text-xs text-gray-600" title="Order of this game within the day (1 = first game played)">
+          Game #
+          <input type="number" min="1" data-meta="gameOrder" value="${orderVal}" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>`;
+        })()}
+        <label class="text-xs text-gray-600">
+          Duration (min)
+          <input type="number" min="1" data-meta="durationMinutes" value="${logForm.durationMinutes}" placeholder="e.g. 48" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>
+        <label class="text-xs text-gray-600 col-span-2">
+          Game type
+          <select data-meta="category" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="rec" ${!sanctioned?'selected':''}>Recreational (pickup · 1v1/2v2/3v3)</option>
+            <option value="sanctioned" ${sanctioned?'selected':''}>Official match (refereed 5v5)</option>
+          </select>
+        </label>
+        <label class="text-xs text-gray-600">
+          Format
+          <select data-meta="format" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            ${['1v1','2v2','3v3','4v4','5v5'].map(f =>
+              `<option value="${f}" ${logForm.format===f?'selected':''}>${f}</option>`).join('')}
+          </select>
+        </label>
+        <label class="text-xs text-gray-600">
+          Scoring
+          <select data-meta="scoring" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="1-2" ${logForm.scoring==='1-2'?'selected':''}>1s &amp; 2s (pickup)</option>
+            <option value="2-3" ${logForm.scoring==='2-3'?'selected':''}>2s &amp; 3s (regular)</option>
+          </select>
+        </label>
+        ${sanctioned ? '' : `
+        <label class="text-xs text-gray-600">
+          Target score
+          <input type="number" min="1" data-meta="ruleScore" value="${logForm.ruleScore}" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>
+        `}
+        <label class="text-xs text-gray-600">
+          Final — ${sanctioned ? 'Your team' : 'Team A'}
+          <input type="number" min="0" data-meta="scoreA" value="${logForm.scoreA}" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>
+        <label class="text-xs text-gray-600">
+          Final — ${sanctioned ? 'Opponent' : 'Team B'}
+          <input type="number" min="0" data-meta="scoreB" value="${logForm.scoreB}" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>
+        <label class="text-xs text-gray-600 col-span-2">
+          Winner
+          <select data-meta="winner" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value=""  ${logForm.winner===''   ?'selected':''}>Auto (from score)</option>
+            <option value="A" ${logForm.winner==='A'  ?'selected':''}>${sanctioned ? 'My team (A)' : 'Team A'}</option>
+            <option value="B" ${logForm.winner==='B'  ?'selected':''}>${sanctioned ? 'Opponent (B)' : 'Team B'}</option>
+            <option value="Tie" ${logForm.winner==='Tie'?'selected':''}>Tie</option>
+          </select>
+        </label>
+        <label class="text-xs text-gray-600 col-span-2 md:col-span-2">
+          Season
+          <select data-meta="seasonId" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">— No season —</option>
+            ${state.seasons.map(s => `<option value="${s.id}" ${logForm.seasonId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="text-xs text-gray-600 col-span-2 md:col-span-4">
+          Notes
+          <input type="text" data-meta="notes" value="${escapeHtml(logForm.notes)}" placeholder="Quick memo for future you" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </label>
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-4">
+        <div class="flex items-baseline justify-between mb-2 flex-wrap gap-1">
+          <h2 class="text-sm font-semibold">What did you track this game?</h2>
+          <span class="text-xs text-gray-500">Uncheck anything you didn't track — those stats will show as N/A.</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-sm">
+          ${TRACK_GROUPS.map(g => `
+            <label class="flex items-center gap-2 border border-gray-200 rounded px-2 py-1.5 cursor-pointer hover:bg-gray-50">
+              <input type="checkbox" data-track="${g.key}" ${tr[g.key] ? 'checked' : ''}>
+              <span>${g.label}</span>
+            </label>
+          `).join('')}
+        </div>
+      </section>
+
+      ${sanctioned ? `
+      <section class="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+        <label class="flex items-center gap-2.5 text-sm cursor-pointer select-none">
+          <input type="checkbox" data-toggle-quarters ${logForm.trackQuarters ? 'checked' : ''} class="rounded border-gray-300 accent-blue-700">
+          <span class="font-medium text-blue-900">Track stats by quarter</span>
+        </label>
+        ${logForm.trackQuarters ? `
+          <div class="flex gap-1.5 items-center flex-wrap">
+            ${[1,2,3,4].map(q => `
+              <button type="button" data-quarter="${q}"
+                class="px-5 py-1.5 rounded text-sm font-semibold transition-colors ${logForm.activeQuarter === q ? 'bg-blue-700 text-white shadow-sm' : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-100'}">
+                Q${q}
+              </button>
+            `).join('')}
+            <span class="ml-2 text-xs text-blue-600">
+              Entering stats for Q${logForm.activeQuarter} — game totals are computed automatically.
+            </span>
+          </div>
+        ` : ''}
+      </section>
+      ` : ''}
+
+      <div class="rounded-lg border ${sanctioned ? 'border-indigo-200 bg-indigo-50 text-indigo-800' : 'border-gray-200 bg-gray-50 text-gray-600'} px-3 py-2 text-xs">
+        ${sanctioned
+          ? `<span class="font-medium">Official match — recording your team only.</span> Add a row for each teammate whose individual stats you want to track (even just yourself).${perSide ? ` Roster hint: ~${perSide} players per side.` : ''}`
+          : `<span class="font-medium">Recreational game.</span>${perSide ? ` ~${perSide} players per team (soft hint — log as many as you like).` : ''}`}
+      </div>
+
+      ${teamSection('A')}
+      ${sanctioned ? '' : teamSection('B')}
+
+      <div id="log-error" class="hidden rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"></div>
+
+      <div class="flex items-center gap-3 flex-wrap">
+        <button type="submit" class="bg-blue-700 text-white rounded-lg px-5 py-2 text-sm font-medium hover:bg-blue-800">${logForm.editingGameId ? 'Update game' : 'Save game'}</button>
+        <button type="button" id="log-cancel" class="text-sm text-gray-600 hover:underline">${logForm.editingGameId ? 'Discard changes' : 'Cancel'}</button>
+        <span class="text-xs text-gray-400 ml-auto">Points auto-compute from your makes. Contested attempts/makes should be a subset of the totals for that shot type.</span>
+      </div>
+    </form>
+  `;
+}
+
+function wireLogGame() {
+  document.querySelectorAll('button[data-go]').forEach(btn => {
+    btn.addEventListener('click', () => go({ name: btn.dataset.go }));
+  });
+
+  const form = document.getElementById('log-form');
+  if (!form) return;
+
+  form.querySelectorAll('[data-meta]').forEach(el => {
+    const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(evt, () => {
+      const k = el.dataset.meta;
+      let v = el.value;
+      if (['ruleScore','scoreA','scoreB'].includes(k)) {
+        v = v === '' ? '' : (parseInt(v, 10) || 0);
+      }
+      if (k === 'seasonId') v = v || null;
+      logForm[k] = v;
+      if (k === 'playedAt') {
+        // Recompute suggested game order whenever the date changes.
+        logForm.gameOrder = '';
+        const gamesOnDate = state.games.filter(g =>
+          g.playedAt.slice(0, 10) === v &&
+          g.id !== (logForm.editingGameId || null)
+        ).length;
+        const suggested = gamesOnDate + 1;
+        logForm.gameOrder = String(suggested);
+        const orderEl = form.querySelector('[data-meta="gameOrder"]');
+        if (orderEl) orderEl.value = suggested;
+      }
+      if (k === 'category') {
+        if (v === 'sanctioned') {
+          // Sanctioned = your team only. Drop any opponent (Team B) rows from the draft,
+          // and nudge format/scoring toward a refereed 5v5 game.
+          logForm.rows = logForm.rows.filter(r => r.team === 'A');
+          if (logForm.rows.length === 0) logForm.rows.push(emptyStatRow('A'));
+          logForm.format = '5v5';
+          logForm.scoring = '2-3';
+        } else {
+          // Back to recreational — make sure there's an opponent team to log.
+          if (!logForm.rows.some(r => r.team === 'B')) logForm.rows.push(emptyStatRow('B'));
+        }
+        render();
+        return;
+      }
+      if (k === 'scoring' || k === 'format') {
+        // Labels (1PT/2PT vs 2PT/3PT), points, and the roster hint all change → full re-render.
+        render();
+        return;
+      }
+      if (k === 'scoreA') {
+        const lbl = document.querySelector('[data-team-final-A]');
+        if (lbl) lbl.textContent = `(final ${v === '' ? '—' : v} pts)`;
+      }
+      if (k === 'scoreB') {
+        const lbl = document.querySelector('[data-team-final-B]');
+        if (lbl) lbl.textContent = `(final ${v === '' ? '—' : v} pts)`;
+      }
+    });
+  });
+
+  form.querySelectorAll('[data-track]').forEach(el => {
+    el.addEventListener('change', () => {
+      const k = el.dataset.track;
+      logForm.tracked[k] = el.checked;
+      // Toggling a group changes which inputs are visible → re-render.
+      render();
+    });
+  });
+
+  form.querySelectorAll('[data-row-i]').forEach(card => {
+    const i = parseInt(card.dataset.rowI);
+    card.querySelectorAll('[data-field]').forEach(input => {
+      input.addEventListener('input', () => {
+        const k = input.dataset.field;
+        if (k === 'playerId') {
+          logForm.rows[i].playerId = input.value;
+          render();
+        } else {
+          // Keep empty as '' so the input stays blank for fast typing; coerce on read via n().
+          const raw = input.value;
+          logForm.rows[i][k] = raw === '' ? '' : (parseInt(raw, 10) || 0);
+          updateRowSummary(i);
+          updateTeamTotals(logForm.rows[i].team);
+        }
+      });
+    });
+    const rm = card.querySelector('button[data-remove-row]');
+    if (rm) rm.addEventListener('click', () => {
+      logForm.rows.splice(i, 1);
+      render();
+    });
+  });
+
+  form.querySelectorAll('button[data-add-row]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      logForm.rows.push(emptyStatRow(btn.dataset.addRow));
+      render();
+    });
+  });
+
+  document.getElementById('log-cancel').addEventListener('click', () => {
+    const msg = logForm.editingGameId ? 'Discard changes to this game?' : 'Discard this entry?';
+    if (!confirm(msg)) return;
+    logForm = null;
+    go({ name: 'games' });
+  });
+
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const errorEl = document.getElementById('log-error');
+    const sanctioned = (logForm.category === 'sanctioned');
+    const filled = logForm.rows.filter(r => r.playerId);
+    const minPlayers = sanctioned ? 1 : 2;
+    if (filled.length < minPlayers) {
+      errorEl.textContent = sanctioned
+        ? 'Pick at least one player to track.'
+        : 'Pick at least two players.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    const ids = new Set(filled.map(r => r.playerId));
+    if (ids.size !== filled.length) {
+      errorEl.textContent = 'Each player can only appear once.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+    const tr = logForm.tracked;
+    if (tr.contested) {
+      for (const r of filled) {
+        if (n(r.contShortMade) > n(r.shortMade) || n(r.contShortAtt) > n(r.shortAtt) ||
+            n(r.contLongMade)  > n(r.longMade)  || n(r.contLongAtt)  > n(r.longAtt)) {
+          errorEl.textContent = "Contested makes/attempts can't exceed the totals for that shot type.";
+          errorEl.classList.remove('hidden');
+          return;
+        }
+      }
+    }
+    if (tr.zones) {
+      for (const r of filled) {
+        if (n(r.contZoneCloseMade) > n(r.zoneCloseMade) || n(r.contZoneCloseAtt) > n(r.zoneCloseAtt) ||
+            n(r.contZoneMidMade)   > n(r.zoneMidMade)   || n(r.contZoneMidAtt)   > n(r.zoneMidAtt)   ||
+            n(r.contZoneLongMade)  > n(r.zoneLongMade)  || n(r.contZoneLongAtt)  > n(r.zoneLongAtt)) {
+          errorEl.textContent = "Contested zone makes/attempts can't exceed that zone's totals.";
+          errorEl.classList.remove('hidden');
+          return;
+        }
+        if (n(r.zoneCloseMade) > n(r.zoneCloseAtt) ||
+            n(r.zoneMidMade)   > n(r.zoneMidAtt)   ||
+            n(r.zoneLongMade)  > n(r.zoneLongAtt)) {
+          errorEl.textContent = "Zone makes can't exceed zone attempts.";
+          errorEl.classList.remove('hidden');
+          return;
+        }
+      }
+    }
+
+    const game = {
+      id: logForm.editingGameId || uid(),
+      playedAt: new Date(logForm.playedAt + 'T12:00:00').toISOString(),
+      order: logForm.gameOrder !== '' ? n(logForm.gameOrder) : 1,
+      durationMinutes: logForm.durationMinutes !== '' ? n(logForm.durationMinutes) : null,
+      winner: logForm.winner || null,
+      trackQuarters: !!(logForm.trackQuarters && logForm.category === 'sanctioned'),
+      category: logForm.category === 'sanctioned' ? 'sanctioned' : 'rec',
+      format: logForm.format,
+      scoring: logForm.scoring,
+      ruleScore: n(logForm.ruleScore),
+      scoreA: n(logForm.scoreA),
+      scoreB: n(logForm.scoreB),
+      notes: logForm.notes,
+      seasonId: logForm.seasonId || null,
+      tracked: { ...tr },
+      stats: filled.map(r => ({
+        playerId: r.playerId,
+        team: r.team,
+        shortMade: n(r.shortMade), shortAtt: n(r.shortAtt),
+        longMade:  n(r.longMade),  longAtt:  n(r.longAtt),
+        // Zero out fields whose group wasn't tracked, so totals don't pick up stale typing.
+        contShortMade: tr.contested ? n(r.contShortMade) : 0,
+        contShortAtt:  tr.contested ? n(r.contShortAtt)  : 0,
+        contLongMade:  tr.contested ? n(r.contLongMade)  : 0,
+        contLongAtt:   tr.contested ? n(r.contLongAtt)   : 0,
+        offReb: tr.rebounds ? n(r.offReb) : 0,
+        defReb: tr.rebounds ? n(r.defReb) : 0,
+        ast: tr.ast ? n(r.ast) : 0,
+        stl: tr.stl ? n(r.stl) : 0,
+        blk: tr.blk ? n(r.blk) : 0,
+        to:  tr.to  ? n(r.to)  : 0,
+        // Zone shots (parallel — only populated when zones tracked)
+        zoneCloseMade: tr.zones ? n(r.zoneCloseMade) : 0,
+        zoneCloseAtt:  tr.zones ? n(r.zoneCloseAtt)  : 0,
+        zoneMidMade:   tr.zones ? n(r.zoneMidMade)   : 0,
+        zoneMidAtt:    tr.zones ? n(r.zoneMidAtt)    : 0,
+        zoneLongMade:  tr.zones ? n(r.zoneLongMade)  : 0,
+        zoneLongAtt:   tr.zones ? n(r.zoneLongAtt)   : 0,
+        contZoneCloseMade: tr.zones ? n(r.contZoneCloseMade) : 0,
+        contZoneCloseAtt:  tr.zones ? n(r.contZoneCloseAtt)  : 0,
+        contZoneMidMade:   tr.zones ? n(r.contZoneMidMade)   : 0,
+        contZoneMidAtt:    tr.zones ? n(r.contZoneMidAtt)    : 0,
+        contZoneLongMade:  tr.zones ? n(r.contZoneLongMade)  : 0,
+        contZoneLongAtt:   tr.zones ? n(r.contZoneLongAtt)   : 0,
+        quarterStats: (logForm.trackQuarters && logForm.category === 'sanctioned' && r.quarters)
+          ? r.quarters
+          : undefined,
+      })),
+    };
+    if (logForm.editingGameId) {
+      // Replace the existing game in-place (keeps its position in the list).
+      const idx = state.games.findIndex(g => g.id === logForm.editingGameId);
+      if (idx !== -1) state.games[idx] = game;
+      else state.games.push(game); // safety fallback
+    } else {
+      state.games.push(game);
+    }
+    saveState();
+    logForm = null;
+    go({ name: 'games' });
+  });
+}
+
+function updateRowSummary(i) {
+  const card = document.querySelector(`[data-row-i="${i}"]`);
+  if (!card) return;
+  const r = logForm.rows[i];
+  const d = rowDerived(r, logForm.scoring);
+  const fgPct = d.fga ? (d.fgm / d.fga * 100).toFixed(1) + '%' : '–';
+  const ptsEl = card.querySelector('[data-pts]');
+  const fgEl  = card.querySelector('[data-fg]');
+  const pctEl = card.querySelector('[data-fgpct]');
+  const rebEl = card.querySelector('[data-reb]');
+  if (ptsEl) ptsEl.textContent = d.points;
+  if (fgEl)  fgEl.textContent  = `${d.fgm}/${d.fga}`;
+  if (pctEl) pctEl.textContent = fgPct;
+  if (rebEl) rebEl.textContent = d.reb;
+}
+
+function updateTeamTotals(team) {
+  const t = computeDraftTotals(logForm, team);
+  const ptsEl = document.querySelector(`[data-team-pts="${team}"]`);
+  const fgEl  = document.querySelector(`[data-team-fg="${team}"]`);
+  const rebEl = document.querySelector(`[data-team-reb="${team}"]`);
+  if (ptsEl) ptsEl.textContent = t.pts;
+  if (fgEl)  fgEl.textContent  = `${t.fgm}/${t.fga}`;
+  if (rebEl) rebEl.textContent = t.reb;
+}
+
+// ============================================================
+// VIEW: Games (history)
+// ============================================================
+function renderGames() {
+  if (state.games.length === 0) {
+    return `
+      <div class="border border-dashed border-gray-300 rounded-lg p-8 text-center text-sm text-gray-600 space-y-3">
+        <div>No games logged yet.</div>
+        <button type="button" class="bg-blue-700 text-white rounded px-3 py-1.5 text-sm hover:bg-blue-800" data-go="log">Log your first game</button>
+      </div>
+    `;
+  }
+
+  const filter = view.seasonFilter || '__all__';
+  const sortedAll = [...state.games].sort((a, b) => {
+    const dd = +new Date(b.playedAt) - +new Date(a.playedAt);
+    return dd !== 0 ? dd : (b.order || 1) - (a.order || 1);
+  });
+  const sorted = sortedAll.filter(g => {
+    if (filter === '__all__') return true;
+    if (filter === '__none__') return !g.seasonId;
+    return g.seasonId === filter;
+  });
+
+  const filterBar = `
+    <div class="flex items-center gap-2 flex-wrap">
+      <label class="text-xs text-gray-600 flex items-center gap-2">
+        Season:
+        <select id="games-season-filter" class="border border-gray-300 rounded px-2 py-1 text-sm">
+          <option value="__all__"  ${filter==='__all__'?'selected':''}>All seasons</option>
+          <option value="__none__" ${filter==='__none__'?'selected':''}>No season</option>
+          ${state.seasons.map(s => `<option value="${s.id}" ${filter===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
+        </select>
+      </label>
+      <span class="text-xs text-gray-500 ml-auto">${sorted.length} of ${sortedAll.length} game${sortedAll.length===1?'':'s'}</span>
+    </div>
+  `;
+
+  if (sorted.length === 0) {
+    return `
+      <div class="space-y-3">
+        ${filterBar}
+        <div class="border border-dashed border-gray-300 rounded-lg p-8 text-center text-sm text-gray-600">
+          No games match this filter.
+        </div>
+      </div>
+    `;
+  }
+
+  // Pre-compute which dates have multiple games so we can show "#N" badges.
+  const dateCounts = new Map();
+  for (const g of sorted) {
+    const dk = g.playedAt.slice(0, 10);
+    dateCounts.set(dk, (dateCounts.get(dk) || 0) + 1);
+  }
+
+  return `
+    <div class="space-y-3">
+      ${filterBar}
+      ${sorted.map(g => {
+        const winner = getWinner(g);
+        const dk = g.playedAt.slice(0, 10);
+        const multiDay = (dateCounts.get(dk) || 1) > 1;
+        const teamA = g.stats.filter(s => s.team === 'A').map(s => byId(s.playerId)).filter(Boolean);
+        const teamB = g.stats.filter(s => s.team === 'B').map(s => byId(s.playerId)).filter(Boolean);
+        const totA = teamTotals(g, 'A');
+        const totB = teamTotals(g, 'B');
+        const scoringLabel = (g.scoring === '2-3') ? '2/3' : (g.scoring === '1-2' ? '1/2' : '');
+        const sName = g.seasonId ? seasonName(g.seasonId) : '';
+        const sanctioned = getCategory(g) === 'sanctioned';
+        const catBadge = sanctioned
+          ? '<span class="inline-block text-[9px] uppercase tracking-wide bg-indigo-100 text-indigo-700 rounded px-1 py-0.5 mr-1">Official</span>'
+          : '<span class="inline-block text-[9px] uppercase tracking-wide bg-gray-100 text-gray-600 rounded px-1 py-0.5 mr-1">Rec</span>';
+        return `
+          <details class="bg-white border border-gray-200 rounded-lg group">
+            <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer">
+              <div class="text-xs text-gray-500 w-32 shrink-0">
+                ${new Date(g.playedAt).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})}
+                ${multiDay ? `<span class="ml-1 text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-1">G${g.order || 1}</span>` : ''}
+                <div class="text-[10px] text-gray-400 mt-0.5">${catBadge}${g.format}${scoringLabel ? ' · '+scoringLabel : ''}${sName ? ' · '+escapeHtml(sName) : ''}</div>
+              </div>
+              <div class="flex-1 flex items-center gap-2 flex-wrap">
+                <div class="flex items-center gap-1">
+                  ${teamA.map(p => playerChip(p)).join('')}
+                </div>
+                <div class="font-semibold text-sm tabular-nums flex items-center gap-1">
+                  <span class="${winner==='A'?'text-green-700':''}">${g.scoreA}</span>
+                  <span class="text-gray-400">–</span>
+                  <span class="${winner==='B'?'text-green-700':''}">${g.scoreB}</span>
+                  ${g.winner ? `<span class="text-[9px] font-normal text-amber-600 border border-amber-300 rounded px-1 ml-0.5">override</span>` : ''}
+                </div>
+                <div class="flex items-center gap-1">
+                  ${sanctioned ? '<span class="text-xs text-gray-400 italic">Opponent</span>' : teamB.map(p => playerChip(p)).join('')}
+                </div>
+              </div>
+              <span class="text-gray-400 text-xs">▾</span>
+            </summary>
+            <div class="border-t border-gray-100 px-4 py-3 space-y-3">
+              ${g.notes ? `<div class="text-xs text-gray-600 italic">"${escapeHtml(g.notes)}"</div>` : ''}
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                ${teamSummaryCard('A', totA, g.scoreA, winner==='A', sanctioned ? 'Your team' : null)}
+                ${sanctioned
+                  ? `<div class="border ${winner==='B' ? 'border-green-200 bg-green-50/60' : 'border-gray-200 bg-gray-50'} rounded-lg p-3 flex items-center justify-between">
+                       <span class="font-medium">Opponent</span>
+                       <span class="tabular-nums font-semibold">${g.scoreB} pts</span>
+                     </div>`
+                  : teamSummaryCard('B', totB, g.scoreB, winner==='B')}
+              </div>
+
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead class="text-xs text-gray-500">
+                    <tr>
+                      <th class="text-left py-1 font-medium">Player</th>
+                      <th class="py-1 font-medium">Tm</th>
+                      <th class="py-1 font-medium">PTS</th>
+                      <th class="py-1 font-medium">FG</th>
+                      <th class="py-1 font-medium" title="Contested makes/attempts">Cont</th>
+                      <th class="py-1 font-medium" title="Off / Def / Total">REB</th>
+                      <th class="py-1 font-medium">AST</th>
+                      <th class="py-1 font-medium">STL</th>
+                      <th class="py-1 font-medium">BLK</th>
+                      <th class="py-1 font-medium">TO</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${g.stats.map(stat => {
+                      const p = byId(stat.playerId);
+                      if (!p) return '';
+                      const s = statShape(stat, g);
+                      const tr = getTracked(g);
+                      const rebCell  = !tr.rebounds  ? NA_HTML : (s.isNew ? `${s.offReb}/${s.defReb}/${s.reb}` : `${s.reb}`);
+                      const contCell = !tr.contested ? NA_HTML : (s.isNew ? `${s.contMade}/${s.contAtt}` : '—');
+                      const zoneRow = tr.zones ? `
+                        <tr>
+                          <td colspan="10" class="py-1 px-2 text-[11px] text-gray-500 italic bg-gray-50">
+                            Zones — Close ${s.zoneCloseMade}/${s.zoneCloseAtt}
+                            (cont. ${s.contZoneCloseMade}/${s.contZoneCloseAtt})
+                            · Mid ${s.zoneMidMade}/${s.zoneMidAtt}
+                            (cont. ${s.contZoneMidMade}/${s.contZoneMidAtt})
+                            · Long ${s.zoneLongMade}/${s.zoneLongAtt}
+                            (cont. ${s.contZoneLongMade}/${s.contZoneLongAtt})
+                          </td>
+                        </tr>` : '';
+                      return `
+                        <tr class="border-t border-gray-100">
+                          <td class="py-1">
+                            <button type="button" class="text-blue-700 hover:underline" data-view-player="${p.id}">${escapeHtml(p.name)}</button>
+                          </td>
+                          <td class="py-1 text-center text-xs text-gray-500">${stat.team}</td>
+                          <td class="py-1 text-center">${s.points}</td>
+                          <td class="py-1 text-center">${s.fgm}/${s.fga}</td>
+                          <td class="py-1 text-center">${contCell}</td>
+                          <td class="py-1 text-center">${rebCell}</td>
+                          <td class="py-1 text-center">${naOr(tr.ast, s.ast)}</td>
+                          <td class="py-1 text-center">${naOr(tr.stl, s.stl)}</td>
+                          <td class="py-1 text-center">${naOr(tr.blk, s.blk)}</td>
+                          <td class="py-1 text-center">${naOr(tr.to,  s.to)}</td>
+                        </tr>
+                        ${zoneRow}
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+              <div class="flex justify-end gap-4">
+                <button type="button" class="text-xs text-blue-700 hover:underline" data-edit-game="${g.id}">Edit game</button>
+                <button type="button" class="text-xs text-gray-400 hover:text-red-600" data-delete-game="${g.id}">Delete game</button>
+              </div>
+            </div>
+          </details>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function teamSummaryCard(team, t, finalScore, won, labelOverride) {
+  const fgPct = t.fga ? (t.fgm / t.fga * 100).toFixed(1) + '%' : '–';
+  const contPct = t.contAtt ? (t.contMade / t.contAtt * 100).toFixed(1) + '%' : '–';
+  const tr = t.tracked || { contested: true, rebounds: true, ast: true, stl: true, blk: true, to: true };
+  const contStr = tr.contested ? `${t.contMade}/${t.contAtt} (${contPct})` : NA_HTML;
+  const orebStr = tr.rebounds  ? `${t.oreb}` : NA_HTML;
+  const drebStr = tr.rebounds  ? `${t.dreb}` : NA_HTML;
+  const rebStr  = tr.rebounds  ? `${t.reb}`  : NA_HTML;
+  const astStr  = tr.ast ? `${t.ast}` : NA_HTML;
+  const stlStr  = tr.stl ? `${t.stl}` : NA_HTML;
+  const blkStr  = tr.blk ? `${t.blk}` : NA_HTML;
+  const toStr   = tr.to  ? `${t.to}`  : NA_HTML;
+  return `
+    <div class="border ${won ? 'border-green-200 bg-green-50/60' : 'border-gray-200 bg-gray-50'} rounded-lg p-3">
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-medium">${labelOverride || ('Team ' + team)}</span>
+        <span class="tabular-nums font-semibold">${finalScore} pts</span>
+      </div>
+      <div class="text-gray-600 grid grid-cols-2 gap-x-3 gap-y-0.5">
+        <div>FG: ${t.fgm}/${t.fga} (${fgPct})</div>
+        <div>Contested: ${contStr}</div>
+        <div>OREB: ${orebStr} · DREB: ${drebStr}</div>
+        <div>REB: ${rebStr}</div>
+        <div>AST: ${astStr} · STL: ${stlStr}</div>
+        <div>BLK: ${blkStr} · TO: ${toStr}</div>
+      </div>
+    </div>
+  `;
+}
+
+function wireGames() {
+  document.querySelectorAll('button[data-go]').forEach(btn => {
+    btn.addEventListener('click', () => go({ name: btn.dataset.go }));
+  });
+  const filterSel = document.getElementById('games-season-filter');
+  if (filterSel) {
+    filterSel.addEventListener('change', () => {
+      view.seasonFilter = filterSel.value;
+      render();
+    });
+  }
+  document.querySelectorAll('button[data-view-player]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      go({ name: 'player', playerId: btn.dataset.viewPlayer });
+    });
+  });
+  document.querySelectorAll('button[data-edit-game]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const game = state.games.find(g => g.id === btn.dataset.editGame);
+      if (!game) return;
+      logForm = gameToLogForm(game);
+      go({ name: 'log' });
+    });
+  });
+
+  document.querySelectorAll('button[data-delete-game]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!confirm('Delete this game?')) return;
+      state.games = state.games.filter(g => g.id !== btn.dataset.deleteGame);
+      saveState();
+      render();
+    });
+  });
+}
+
+// ============================================================
+// VIEW: Player detail
+// ============================================================
+// Aggregate a list of {game, stat} records into the summary needed by the player detail view.
+// Returned object is also used by the season comparison view.
+function aggregatePlayerStats(gamesAndStats) {
+  const sorted = [...gamesAndStats].sort((a, b) => {
+    const dd = +new Date(a.game.playedAt) - +new Date(b.game.playedAt);
+    return dd !== 0 ? dd : (a.game.order || 1) - (b.game.order || 1);
+  });
+  const gp = sorted.length;
+  const totals = {
+    points: 0, fgm: 0, fga: 0,
+    shortMade: 0, shortAtt: 0,
+    longMade: 0, longAtt: 0,
+    contMade: 0, contAtt: 0,
+    contShortMade: 0, contShortAtt: 0,
+    contLongMade: 0, contLongAtt: 0,
+    offReb: 0, defReb: 0, reb: 0,
+    ast: 0, stl: 0, blk: 0, to: 0,
+    // Zones
+    zoneCloseMade: 0, zoneCloseAtt: 0,
+    zoneMidMade:   0, zoneMidAtt:   0,
+    zoneLongMade:  0, zoneLongAtt:  0,
+    contZoneCloseMade: 0, contZoneCloseAtt: 0,
+    contZoneMidMade:   0, contZoneMidAtt:   0,
+    contZoneLongMade:  0, contZoneLongAtt:  0,
+  };
+  const trackedGp = { contested: 0, rebounds: 0, ast: 0, stl: 0, blk: 0, to: 0, zones: 0 };
+  let teamOrebSum = 0, teamDrebSum = 0, teamRebSum = 0;
+  const scoringsUsed = new Set();
+  for (const x of sorted) {
+    const s = statShape(x.stat, x.game);
+    const t = getTracked(x.game);
+    scoringsUsed.add(x.game.scoring || '1-2');
+    totals.points += s.points;
+    totals.fgm += s.fgm; totals.fga += s.fga;
+    totals.shortMade += s.shortMade; totals.shortAtt += s.shortAtt;
+    totals.longMade  += s.longMade;  totals.longAtt  += s.longAtt;
+    if (t.contested) {
+      trackedGp.contested++;
+      totals.contMade += s.contMade; totals.contAtt += s.contAtt;
+      totals.contShortMade += s.contShortMade; totals.contShortAtt += s.contShortAtt;
+      totals.contLongMade  += s.contLongMade;  totals.contLongAtt  += s.contLongAtt;
+    }
+    if (t.rebounds) {
+      trackedGp.rebounds++;
+      totals.offReb += s.offReb; totals.defReb += s.defReb; totals.reb += s.reb;
+      const tt = teamTotals(x.game, x.stat.team);
+      teamOrebSum += tt.oreb; teamDrebSum += tt.dreb; teamRebSum += tt.reb;
+    }
+    if (t.ast) { trackedGp.ast++; totals.ast += s.ast; }
+    if (t.stl) { trackedGp.stl++; totals.stl += s.stl; }
+    if (t.blk) { trackedGp.blk++; totals.blk += s.blk; }
+    if (t.to)  { trackedGp.to++;  totals.to  += s.to;  }
+    if (t.zones) {
+      trackedGp.zones++;
+      totals.zoneCloseMade += s.zoneCloseMade; totals.zoneCloseAtt += s.zoneCloseAtt;
+      totals.zoneMidMade   += s.zoneMidMade;   totals.zoneMidAtt   += s.zoneMidAtt;
+      totals.zoneLongMade  += s.zoneLongMade;  totals.zoneLongAtt  += s.zoneLongAtt;
+      totals.contZoneCloseMade += s.contZoneCloseMade; totals.contZoneCloseAtt += s.contZoneCloseAtt;
+      totals.contZoneMidMade   += s.contZoneMidMade;   totals.contZoneMidAtt   += s.contZoneMidAtt;
+      totals.contZoneLongMade  += s.contZoneLongMade;  totals.contZoneLongAtt  += s.contZoneLongAtt;
+    }
+  }
+  const wlt = (() => {
+    let w = 0, l = 0, t = 0;
+    for (const x of sorted) {
+      const gw = getWinner(x.game);
+      if (gw === 'Tie') { t++; continue; }
+      (x.stat.team === gw) ? w++ : l++;
+    }
+    return { w, l, t };
+  })();
+  return { sorted, gp, totals, trackedGp, teamOrebSum, teamDrebSum, teamRebSum, scoringsUsed, ...wlt };
+}
+
+function renderPlayerDetail(playerId) {
+  const player = byId(playerId);
+  if (!player) {
+    return `<div class="text-sm text-gray-600">Player not found. <button type="button" class="text-blue-700 hover:underline" data-go="players">Back</button></div>`;
+  }
+
+  const allMyGames = playerGames(player.id);
+  if (allMyGames.length === 0) {
+    return `
+      <div class="space-y-4">
+        ${playerHeader(player, 0, 0, 0, 0, 0)}
+        <div class="border border-dashed border-gray-300 rounded-lg p-8 text-center text-sm text-gray-600">
+          No games for ${escapeHtml(player.name)} yet. Log a game on the "Log game" tab.
+        </div>
+      </div>
+    `;
+  }
+
+  // Apply season filter from view state.
+  const filter = view.seasonFilter || '__all__';
+  const filteredGames = allMyGames.filter(x => {
+    if (filter === '__all__')  return true;
+    if (filter === '__none__') return !x.game.seasonId;
+    return x.game.seasonId === filter;
+  });
+
+  if (filteredGames.length === 0) {
+    return `
+      <div class="space-y-4">
+        ${playerHeader(player, 0, 0, 0, 0, 0)}
+        ${seasonFilterBar(player, filter, allMyGames)}
+        <div class="border border-dashed border-gray-300 rounded-lg p-8 text-center text-sm text-gray-600">
+          No games for ${escapeHtml(player.name)} in this season.
+        </div>
+        ${comparisonSection(player, allMyGames)}
+      </div>
+    `;
+  }
+
+  const sorted = [...filteredGames].sort((a, b) => {
+    const dd = +new Date(a.game.playedAt) - +new Date(b.game.playedAt);
+    return dd !== 0 ? dd : (a.game.order || 1) - (b.game.order || 1);
+  });
+  const gp = sorted.length;
+  const totals = {
+    points: 0, fgm: 0, fga: 0,
+    shortMade: 0, shortAtt: 0,
+    longMade: 0, longAtt: 0,
+    contMade: 0, contAtt: 0,
+    contShortMade: 0, contShortAtt: 0,
+    contLongMade: 0, contLongAtt: 0,
+    offReb: 0, defReb: 0, reb: 0,
+    ast: 0, stl: 0, blk: 0, to: 0,
+    // Zones (parallel breakdown)
+    zoneCloseMade: 0, zoneCloseAtt: 0,
+    zoneMidMade:   0, zoneMidAtt:   0,
+    zoneLongMade:  0, zoneLongAtt:  0,
+    contZoneCloseMade: 0, contZoneCloseAtt: 0,
+    contZoneMidMade:   0, contZoneMidAtt:   0,
+    contZoneLongMade:  0, contZoneLongAtt:  0,
+  };
+  // Per-stat-group: how many of this player's games actually tracked it.
+  // Shooting (fg, points, short/long) is always tracked.
+  const trackedGp = { contested: 0, rebounds: 0, ast: 0, stl: 0, blk: 0, to: 0, zones: 0 };
+  // Team-share rebound denominators: total rebounds the player's team grabbed in games where rebounds were tracked.
+  let teamOrebSum = 0, teamDrebSum = 0, teamRebSum = 0;
+  // Track scoring rules used so we can label shooting cards.
+  const scoringsUsed = new Set();
+  for (const x of sorted) {
+    const s = statShape(x.stat, x.game);
+    const t = getTracked(x.game);
+    scoringsUsed.add(x.game.scoring || '1-2');
+    // Shooting + points: always counted.
+    totals.points += s.points;
+    totals.fgm += s.fgm; totals.fga += s.fga;
+    totals.shortMade += s.shortMade; totals.shortAtt += s.shortAtt;
+    totals.longMade  += s.longMade;  totals.longAtt  += s.longAtt;
+    if (t.contested) {
+      trackedGp.contested++;
+      totals.contMade += s.contMade; totals.contAtt += s.contAtt;
+      totals.contShortMade += s.contShortMade; totals.contShortAtt += s.contShortAtt;
+      totals.contLongMade  += s.contLongMade;  totals.contLongAtt  += s.contLongAtt;
+    }
+    if (t.rebounds) {
+      trackedGp.rebounds++;
+      totals.offReb += s.offReb; totals.defReb += s.defReb; totals.reb += s.reb;
+      // Sum the player's team's rebounds in this game (denominator for team-share %).
+      const tt = teamTotals(x.game, x.stat.team);
+      teamOrebSum += tt.oreb; teamDrebSum += tt.dreb; teamRebSum += tt.reb;
+    }
+    if (t.ast) { trackedGp.ast++; totals.ast += s.ast; }
+    if (t.stl) { trackedGp.stl++; totals.stl += s.stl; }
+    if (t.blk) { trackedGp.blk++; totals.blk += s.blk; }
+    if (t.to)  { trackedGp.to++;  totals.to  += s.to;  }
+    if (t.zones) {
+      trackedGp.zones++;
+      totals.zoneCloseMade += s.zoneCloseMade; totals.zoneCloseAtt += s.zoneCloseAtt;
+      totals.zoneMidMade   += s.zoneMidMade;   totals.zoneMidAtt   += s.zoneMidAtt;
+      totals.zoneLongMade  += s.zoneLongMade;  totals.zoneLongAtt  += s.zoneLongAtt;
+      totals.contZoneCloseMade += s.contZoneCloseMade; totals.contZoneCloseAtt += s.contZoneCloseAtt;
+      totals.contZoneMidMade   += s.contZoneMidMade;   totals.contZoneMidAtt   += s.contZoneMidAtt;
+      totals.contZoneLongMade  += s.contZoneLongMade;  totals.contZoneLongAtt  += s.contZoneLongAtt;
+    }
+  }
+
+  // Pick shot-type labels. If all the player's games used the same scoring, use specific
+  // labels (1PT/2PT or 2PT/3PT). If mixed, fall back to generic Short/Long.
+  let shortLbl = 'Short', longLbl = 'Long';
+  if (scoringsUsed.size === 1) {
+    const v = pointValues([...scoringsUsed][0]);
+    shortLbl = `${v.short}PT`;
+    longLbl  = `${v.long}PT`;
+  }
+
+  const per = k => gp ? totals[k] / gp : 0;
+  // Per-game average that only divides by games where the stat was tracked.
+  const perTracked = (k, group) => trackedGp[group] ? totals[k] / trackedGp[group] : null;
+  const pct = (m, a) => a ? (m / a * 100) : 0;
+  const fmtAvg = (v, digits = 1) => v === null ? NA_HTML : v.toFixed(digits);
+
+  function outcome({ stat, game }) {
+    const w = getWinner(game);
+    if (w === 'Tie') return 'T';
+    return stat.team === w ? 'W' : 'L';
+  }
+  const wins   = sorted.filter(x => outcome(x) === 'W').length;
+  const losses = sorted.filter(x => outcome(x) === 'L').length;
+  const ties   = sorted.filter(x => outcome(x) === 'T').length;
+  const winPct = gp ? (wins / gp) * 100 : 0;
+
+  const hasNewData = sorted.some(x => statShape(x.stat, x.game).isNew);
+
+  const rebSub = hasNewData && trackedGp.rebounds > 0
+    ? `O ${fmtAvg(perTracked('offReb','rebounds'))} · D ${fmtAvg(perTracked('defReb','rebounds'))}`
+    : null;
+
+  const baseMetrics = [
+    { label: 'Points / game',    value: per('points').toFixed(1) },
+    { label: 'FG%',              value: pct(totals.fgm, totals.fga).toFixed(1) + '%', sub: `${totals.fgm} / ${totals.fga}` },
+    { label: 'Rebounds / game',  value: fmtAvg(perTracked('reb','rebounds')), sub: rebSub, hint: trackedGp.rebounds < gp ? `${trackedGp.rebounds}/${gp} games tracked` : null },
+    { label: 'Assists / game',   value: fmtAvg(perTracked('ast','ast')), hint: trackedGp.ast < gp ? `${trackedGp.ast}/${gp} games tracked` : null },
+    { label: 'Steals / game',    value: fmtAvg(perTracked('stl','stl')), hint: trackedGp.stl < gp ? `${trackedGp.stl}/${gp} games tracked` : null },
+    { label: 'Blocks / game',    value: fmtAvg(perTracked('blk','blk')), hint: trackedGp.blk < gp ? `${trackedGp.blk}/${gp} games tracked` : null },
+    { label: 'Turnovers / game', value: fmtAvg(perTracked('to','to')),   hint: trackedGp.to  < gp ? `${trackedGp.to}/${gp} games tracked`  : null },
+    { label: 'Win %',            value: winPct.toFixed(1) + '%' },
+  ];
+
+  const contestedAvailable = hasNewData && trackedGp.contested > 0;
+  const contHint = contestedAvailable && trackedGp.contested < gp ? `${trackedGp.contested}/${gp} games tracked` : null;
+  const shootingBreakdown = hasNewData ? [
+    { label: 'Total FG%', value: pct(totals.fgm, totals.fga).toFixed(1) + '%', sub: `${totals.fgm}/${totals.fga}` },
+    { label: `${shortLbl} FG%`, value: pct(totals.shortMade, totals.shortAtt).toFixed(1) + '%', sub: `${totals.shortMade}/${totals.shortAtt}` },
+    { label: `${longLbl} FG%`,  value: pct(totals.longMade,  totals.longAtt ).toFixed(1) + '%', sub: `${totals.longMade}/${totals.longAtt}` },
+    {
+      label: `Cont. ${shortLbl} FG%`,
+      value: contestedAvailable ? pct(totals.contShortMade, totals.contShortAtt).toFixed(1) + '%' : NA_HTML,
+      sub:   contestedAvailable ? `${totals.contShortMade}/${totals.contShortAtt}` : null,
+      hint:  contHint,
+    },
+    {
+      label: `Cont. ${longLbl} FG%`,
+      value: contestedAvailable ? pct(totals.contLongMade, totals.contLongAtt).toFixed(1) + '%' : NA_HTML,
+      sub:   contestedAvailable ? `${totals.contLongMade}/${totals.contLongAtt}` : null,
+      hint:  contHint,
+    },
+    {
+      label: 'Contested FG% (overall)',
+      value: contestedAvailable ? pct(totals.contMade, totals.contAtt).toFixed(1) + '%' : NA_HTML,
+      sub:   contestedAvailable ? `${totals.contMade}/${totals.contAtt}` : null,
+      hint:  contHint,
+    },
+  ] : [];
+
+  // Shot zones — parallel breakdown of where on the court shots came from.
+  const zonesAvailable = hasNewData && trackedGp.zones > 0;
+  const zoneHint = zonesAvailable && trackedGp.zones < gp ? `${trackedGp.zones}/${gp} games tracked` : null;
+  const zoneBreakdown = zonesAvailable ? [
+    {
+      label: 'Close FG%',
+      value: totals.zoneCloseAtt ? pct(totals.zoneCloseMade, totals.zoneCloseAtt).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.zoneCloseMade}/${totals.zoneCloseAtt}`,
+      hint: zoneHint,
+    },
+    {
+      label: 'Mid FG%',
+      value: totals.zoneMidAtt ? pct(totals.zoneMidMade, totals.zoneMidAtt).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.zoneMidMade}/${totals.zoneMidAtt}`,
+      hint: zoneHint,
+    },
+    {
+      label: 'Long FG%',
+      value: totals.zoneLongAtt ? pct(totals.zoneLongMade, totals.zoneLongAtt).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.zoneLongMade}/${totals.zoneLongAtt}`,
+      hint: zoneHint,
+    },
+    {
+      label: 'Cont. Close FG%',
+      value: totals.contZoneCloseAtt ? pct(totals.contZoneCloseMade, totals.contZoneCloseAtt).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.contZoneCloseMade}/${totals.contZoneCloseAtt}`,
+      hint: zoneHint,
+    },
+    {
+      label: 'Cont. Mid FG%',
+      value: totals.contZoneMidAtt ? pct(totals.contZoneMidMade, totals.contZoneMidAtt).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.contZoneMidMade}/${totals.contZoneMidAtt}`,
+      hint: zoneHint,
+    },
+    {
+      label: 'Cont. Long FG%',
+      value: totals.contZoneLongAtt ? pct(totals.contZoneLongMade, totals.contZoneLongAtt).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.contZoneLongMade}/${totals.contZoneLongAtt}`,
+      hint: zoneHint,
+    },
+  ] : [];
+
+  // Rebound % = player's share of their team's rebounds across games where rebounds were tracked.
+  const rebsAvailable = hasNewData && trackedGp.rebounds > 0;
+  const rebHint = rebsAvailable && trackedGp.rebounds < gp ? `${trackedGp.rebounds}/${gp} games tracked` : null;
+  const reboundBreakdown = rebsAvailable ? [
+    {
+      label: 'Off. rebound %',
+      value: teamOrebSum ? pct(totals.offReb, teamOrebSum).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.offReb} of ${teamOrebSum} team OREB`,
+      hint: rebHint,
+    },
+    {
+      label: 'Def. rebound %',
+      value: teamDrebSum ? pct(totals.defReb, teamDrebSum).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.defReb} of ${teamDrebSum} team DREB`,
+      hint: rebHint,
+    },
+    {
+      label: 'Total rebound %',
+      value: teamRebSum ? pct(totals.reb, teamRebSum).toFixed(1) + '%' : NA_HTML,
+      sub: `${totals.reb} of ${teamRebSum} team REB`,
+      hint: rebHint,
+    },
+  ] : [];
+
+  // Games that have any FG attempts at all — used to decide whether to show the chart section.
+  const hasFgData = sorted.filter(x => statShape(x.stat, x.game).fga > 0).length >= 2;
+
+  // Date-level counts so the game log table can show a "#N" badge when multiple games share a date.
+  const playerDateCounts = new Map();
+  for (const x of sorted) {
+    const dk = x.game.playedAt.slice(0, 10);
+    playerDateCounts.set(dk, (playerDateCounts.get(dk) || 0) + 1);
+  }
+
+  return `
+    <div class="space-y-6">
+      ${playerHeader(player, gp, wins, losses, ties, winPct)}
+      ${seasonFilterBar(player, filter, allMyGames)}
+
+      <section>
+        <div class="section-h mb-2">Per game</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          ${baseMetrics.map(m => metricCard(m)).join('')}
+        </div>
+      </section>
+
+      ${shootingBreakdown.length > 0 ? `
+        <section>
+          <div class="section-h mb-2">Shooting breakdown</div>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+            ${shootingBreakdown.map(m => metricCard(m)).join('')}
+          </div>
+        </section>
+      ` : ''}
+
+      ${reboundBreakdown.length > 0 ? `
+        <section>
+          <div class="section-h mb-2">Rebounding breakdown</div>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+            ${reboundBreakdown.map(m => metricCard(m)).join('')}
+          </div>
+          <p class="text-[11px] text-gray-400 mt-2">Percentages are your share of your team's rebounds in games where rebounds were tracked.</p>
+        </section>
+      ` : ''}
+
+      ${zoneBreakdown.length > 0 ? `
+        <section>
+          <div class="section-h mb-2">Shot zone breakdown <span class="text-[11px] font-normal text-gray-400 normal-case tracking-normal">(parallel — separate from FG% above)</span></div>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+            ${zoneBreakdown.map(m => metricCard(m)).join('')}
+          </div>
+          <p class="text-[11px] text-gray-400 mt-2">Tracked separately from total shooting. Use this to see which areas of the court you score from best.</p>
+        </section>
+      ` : ''}
+
+      ${hasFgData ? `
+        <section class="bg-white border border-gray-200 rounded-lg p-4">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <div class="section-h">Shooting % trend</div>
+            <div class="flex gap-1" id="chart-view-tabs">
+              ${['game', 'day'].map(v => {
+                const active = (view.chartView || 'game') === v;
+                const lbl = v === 'game' ? 'Per game' : 'Per day';
+                return `<button type="button" data-chart-view="${v}"
+                  class="px-2.5 py-1 rounded text-xs font-medium transition-colors ${active ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">
+                  ${lbl}
+                </button>`;
+              }).join('')}
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-1.5 mb-3" id="chart-stat-tabs">
+            ${[
+              { key: 'total',     label: 'Total FG%',            show: true },
+              { key: 'short',     label: shortLbl + ' FG%',      show: hasNewData },
+              { key: 'long',      label: longLbl + ' FG%',       show: hasNewData },
+              { key: 'contShort', label: 'Cont. ' + shortLbl,    show: hasNewData && contestedAvailable },
+              { key: 'contLong',  label: 'Cont. ' + longLbl,     show: hasNewData && contestedAvailable },
+            ].filter(t => t.show).map(t => {
+              const active = (view.chartStat || 'total') === t.key;
+              return `<button type="button" data-chart-stat="${t.key}"
+                class="px-3 py-1 rounded text-xs font-medium transition-colors ${active ? 'bg-indigo-700 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">
+                ${t.label}
+              </button>`;
+            }).join('')}
+          </div>
+          <div id="chart-no-data" class="hidden text-sm text-gray-400 text-center py-8">No data for this stat type yet</div>
+          <div style="height: 220px;"><canvas id="trend-chart"></canvas></div>
+        </section>
+      ` : ''}
+
+      <section>
+        <div class="section-h mb-2">Game log</div>
+        <div class="bg-white border border-gray-200 rounded-lg overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-xs text-gray-600">
+              <tr>
+                <th class="text-left px-3 py-2 font-medium">Date</th>
+                <th class="px-2 py-2 font-medium">Fmt</th>
+                <th class="px-2 py-2 font-medium">W/L</th>
+                <th class="px-2 py-2 font-medium">PTS</th>
+                <th class="px-2 py-2 font-medium">FG</th>
+                <th class="px-2 py-2 font-medium" title="Contested">Cont</th>
+                <th class="px-2 py-2 font-medium" title="Off / Def / Total">REB</th>
+                <th class="px-2 py-2 font-medium">AST</th>
+                <th class="px-2 py-2 font-medium">STL</th>
+                <th class="px-2 py-2 font-medium">BLK</th>
+                <th class="px-2 py-2 font-medium">TO</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${[...sorted].reverse().map(x => {
+                const s = statShape(x.stat, x.game);
+                const t = getTracked(x.game);
+                const r = outcome(x);
+                const cls = r === 'W' ? 'text-green-700' : r === 'L' ? 'text-red-700' : 'text-gray-500';
+                const rebCell  = !t.rebounds  ? NA_HTML : (s.isNew ? `${s.offReb}/${s.defReb}/${s.reb}` : `${s.reb}`);
+                const contCell = !t.contested ? NA_HTML : (s.isNew ? `${s.contMade}/${s.contAtt}` : '—');
+                return `
+                  <tr class="border-t border-gray-100">
+                    <td class="px-3 py-1.5 text-gray-600">
+                      ${new Date(x.game.playedAt).toLocaleDateString()}
+                      ${(playerDateCounts.get(x.game.playedAt.slice(0,10)) || 1) > 1 ? `<span class="ml-1 text-[10px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-1">G${x.game.order||1}</span>` : ''}
+                    </td>
+                    <td class="px-2 py-1.5 text-center">${x.game.format}</td>
+                    <td class="px-2 py-1.5 text-center font-medium ${cls}">${r}</td>
+                    <td class="px-2 py-1.5 text-center">${s.points}</td>
+                    <td class="px-2 py-1.5 text-center">${s.fgm}/${s.fga}</td>
+                    <td class="px-2 py-1.5 text-center">${contCell}</td>
+                    <td class="px-2 py-1.5 text-center">${rebCell}</td>
+                    <td class="px-2 py-1.5 text-center">${naOr(t.ast, s.ast)}</td>
+                    <td class="px-2 py-1.5 text-center">${naOr(t.stl, s.stl)}</td>
+                    <td class="px-2 py-1.5 text-center">${naOr(t.blk, s.blk)}</td>
+                    <td class="px-2 py-1.5 text-center">${naOr(t.to,  s.to)}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      ${comparisonSection(player, allMyGames)}
+    </div>
+  `;
+}
+
+function seasonFilterBar(player, currentFilter, allMyGames) {
+  const counts = new Map();
+  let noneCount = 0;
+  for (const x of allMyGames) {
+    if (!x.game.seasonId) noneCount++;
+    else counts.set(x.game.seasonId, (counts.get(x.game.seasonId) || 0) + 1);
+  }
+  // Only show non-empty options.
+  const seasonOpts = state.seasons
+    .filter(s => counts.has(s.id))
+    .map(s => `<option value="${s.id}" ${currentFilter===s.id?'selected':''}>${escapeHtml(s.name)} (${counts.get(s.id)})</option>`);
+  // If there are no seasons at all that this player has games in, hide the filter entirely.
+  if (seasonOpts.length === 0 && noneCount === allMyGames.length) {
+    return '';
+  }
+  return `
+    <div class="flex items-center gap-2 flex-wrap">
+      <label class="text-xs text-gray-600 flex items-center gap-2">
+        Season:
+        <select id="player-season-filter" class="border border-gray-300 rounded px-2 py-1 text-sm">
+          <option value="__all__" ${currentFilter==='__all__'?'selected':''}>All time (${allMyGames.length})</option>
+          ${noneCount > 0 ? `<option value="__none__" ${currentFilter==='__none__'?'selected':''}>No season (${noneCount})</option>` : ''}
+          ${seasonOpts.join('')}
+        </select>
+      </label>
+    </div>
+  `;
+}
+
+function comparisonSection(player, allMyGames) {
+  // Build groups: one per season the player has games in, plus "No season" if any untagged.
+  const groups = [];
+  for (const s of state.seasons) {
+    const g = allMyGames.filter(x => x.game.seasonId === s.id);
+    if (g.length > 0) groups.push({ key: s.id, label: s.name, games: g });
+  }
+  const ungrouped = allMyGames.filter(x => !x.game.seasonId);
+  if (ungrouped.length > 0) groups.push({ key: '__none__', label: 'No season', games: ungrouped });
+
+  // Need at least 2 distinct buckets for a comparison to be informative.
+  if (groups.length < 2) return '';
+
+  // Always include "All time" as the first column for context.
+  const cols = [{ key: '__all__', label: 'All time', games: allMyGames }, ...groups];
+  const summaries = cols.map(c => ({ ...c, agg: aggregatePlayerStats(c.games) }));
+
+  const pct = (m, a) => a ? (m / a * 100).toFixed(1) + '%' : '–';
+  const avg = (n, d) => d ? (n / d).toFixed(1) : '–';
+
+  const rows = [
+    { label: 'Games',           f: ({agg}) => agg.gp },
+    { label: 'W–L–T',           f: ({agg}) => `${agg.w}–${agg.l}–${agg.t}` },
+    { label: 'Win %',           f: ({agg}) => agg.gp ? ((agg.w / agg.gp) * 100).toFixed(1) + '%' : '–' },
+    { label: 'PTS / G',         f: ({agg}) => avg(agg.totals.points, agg.gp) },
+    { label: 'FG%',             f: ({agg}) => pct(agg.totals.fgm, agg.totals.fga) },
+    { label: 'Short FG%',       f: ({agg}) => pct(agg.totals.shortMade, agg.totals.shortAtt) },
+    { label: 'Long FG%',        f: ({agg}) => pct(agg.totals.longMade,  agg.totals.longAtt)  },
+    { label: 'Cont. FG%',       f: ({agg}) => agg.trackedGp.contested ? pct(agg.totals.contMade, agg.totals.contAtt) : 'N/A' },
+    { label: 'REB / G',         f: ({agg}) => agg.trackedGp.rebounds ? avg(agg.totals.reb, agg.trackedGp.rebounds) : 'N/A' },
+    { label: 'Total REB %',     f: ({agg}) => agg.trackedGp.rebounds && agg.teamRebSum ? pct(agg.totals.reb, agg.teamRebSum) : 'N/A' },
+    { label: 'AST / G',         f: ({agg}) => agg.trackedGp.ast ? avg(agg.totals.ast, agg.trackedGp.ast) : 'N/A' },
+    { label: 'STL / G',         f: ({agg}) => agg.trackedGp.stl ? avg(agg.totals.stl, agg.trackedGp.stl) : 'N/A' },
+    { label: 'BLK / G',         f: ({agg}) => agg.trackedGp.blk ? avg(agg.totals.blk, agg.trackedGp.blk) : 'N/A' },
+    { label: 'TO / G',          f: ({agg}) => agg.trackedGp.to  ? avg(agg.totals.to,  agg.trackedGp.to)  : 'N/A' },
+  ];
+
+  return `
+    <section>
+      <div class="section-h mb-2">Compare seasons</div>
+      <div class="bg-white border border-gray-200 rounded-lg overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 text-xs text-gray-600">
+            <tr>
+              <th class="text-left px-3 py-2 font-medium">Stat</th>
+              ${summaries.map(c => `<th class="px-2 py-2 font-medium">${escapeHtml(c.label)}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-t border-gray-100">
+                <td class="px-3 py-1.5 text-gray-700">${r.label}</td>
+                ${summaries.map(c => {
+                  const v = r.f(c);
+                  const isNa = v === 'N/A';
+                  return `<td class="px-2 py-1.5 text-center tabular-nums ${isNa ? 'text-gray-400 italic' : ''}">${v}</td>`;
+                }).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function metricCard(m) {
+  return `
+    <div class="bg-white border border-gray-200 rounded-lg px-4 py-3">
+      <div class="text-xs text-gray-500">${m.label}</div>
+      <div class="text-xl font-medium">${m.value}</div>
+      ${m.sub ? `<div class="text-xs text-gray-400 mt-0.5">${m.sub}</div>` : ''}
+      ${m.hint ? `<div class="text-[10px] text-amber-600 mt-0.5">${m.hint}</div>` : ''}
+    </div>
+  `;
+}
+
+function wirePlayerDetail(playerId) {
+  document.querySelectorAll('button[data-go]').forEach(btn => {
+    btn.addEventListener('click', () => go({ name: btn.dataset.go }));
+  });
+
+  const seasonSel = document.getElementById('player-season-filter');
+  if (seasonSel) {
+    seasonSel.addEventListener('change', () => {
+      view.seasonFilter = seasonSel.value;
+      render();
+    });
+  }
+
+  const player = byId(playerId);
+  if (!player) return;
+  const allMyGames = playerGames(player.id);
+  const filter = view.seasonFilter || '__all__';
+  const myGames = allMyGames.filter(x => {
+    if (filter === '__all__')  return true;
+    if (filter === '__none__') return !x.game.seasonId;
+    return x.game.seasonId === filter;
+  });
+  const sorted = [...myGames].sort((a, b) => {
+    const dd = +new Date(a.game.playedAt) - +new Date(b.game.playedAt);
+    return dd !== 0 ? dd : (a.game.order || 1) - (b.game.order || 1);
+  });
+
+  // Recompute shot-type labels from this player's games (same logic as renderPlayerDetail).
+  const scoringsUsedW = new Set(sorted.map(x => x.game.scoring || '1-2'));
+  let shortLblW = 'Short', longLblW = 'Long';
+  if (scoringsUsedW.size === 1) {
+    const vw = pointValues([...scoringsUsedW][0]);
+    shortLblW = `${vw.short}PT`;
+    longLblW  = `${vw.long}PT`;
+  }
+
+  const statLabels = {
+    total:     'FG%',
+    short:     shortLblW + ' FG%',
+    long:      longLblW  + ' FG%',
+    contShort: 'Cont. ' + shortLblW + ' FG%',
+    contLong:  'Cont. ' + longLblW  + ' FG%',
+  };
+
+  function buildChart(statKey) {
+    // Highlight active stat-type button.
+    document.querySelectorAll('button[data-chart-stat]').forEach(btn => {
+      const active = btn.dataset.chartStat === statKey;
+      btn.classList.toggle('bg-indigo-700', active);
+      btn.classList.toggle('text-white',    active);
+      btn.classList.toggle('bg-gray-100',   !active);
+      btn.classList.toggle('text-gray-600', !active);
+      btn.classList.toggle('hover:bg-gray-200', !active);
+    });
+
+    // Highlight active view-toggle button.
+    const chartView = view.chartView || 'game';
+    document.querySelectorAll('button[data-chart-view]').forEach(btn => {
+      const active = btn.dataset.chartView === chartView;
+      btn.classList.toggle('bg-gray-700',   active);
+      btn.classList.toggle('text-white',    active);
+      btn.classList.toggle('bg-gray-100',   !active);
+      btn.classList.toggle('text-gray-600', !active);
+      btn.classList.toggle('hover:bg-gray-200', !active);
+    });
+
+    // Pull per-game raw made/att values (filter games where the stat had any attempts).
+    const rawPts = sorted.map(x => {
+      const s = statShape(x.stat, x.game);
+      let made, att;
+      switch (statKey) {
+        case 'short':     made = s.shortMade;     att = s.shortAtt;     break;
+        case 'long':      made = s.longMade;      att = s.longAtt;      break;
+        case 'contShort': made = s.contShortMade; att = s.contShortAtt; break;
+        case 'contLong':  made = s.contLongMade;  att = s.contLongAtt;  break;
+        default:          made = s.fgm;           att = s.fga;          break;
+      }
+      return {
+        date: new Date(x.game.playedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        gameOrder: x.game.order || 1,
+        made, att,
+      };
+    }).filter(p => p.att > 0);
+
+    // Aggregate per-day if requested: sum made+att for all games on the same day.
+    let pts;
+    if (chartView === 'day') {
+      const dayMap = new Map();
+      for (const p of rawPts) {
+        if (!dayMap.has(p.date)) dayMap.set(p.date, { made: 0, att: 0 });
+        dayMap.get(p.date).made += p.made;
+        dayMap.get(p.date).att  += p.att;
+      }
+      pts = [...dayMap.entries()].map(([date, { made, att }]) => ({
+        date,
+        value: att ? (made / att) * 100 : null,
+      })).filter(p => p.value !== null);
+    } else {
+      // Per-game: if multiple games share the same date label, append "#N" to distinguish.
+      const dateCounts = new Map();
+      for (const p of rawPts) dateCounts.set(p.date, (dateCounts.get(p.date) || 0) + 1);
+      pts = rawPts.map(p => ({
+        date: dateCounts.get(p.date) > 1 ? `${p.date} #${p.gameOrder}` : p.date,
+        value: (p.made / p.att) * 100,
+      }));
+    }
+
+    const canvas  = document.getElementById('trend-chart');
+    const noData  = document.getElementById('chart-no-data');
+    if (!canvas) return;
+
+    if (chart) { chart.destroy(); chart = null; }
+
+    if (pts.length < 2) {
+      if (noData) noData.classList.remove('hidden');
+      canvas.style.display = 'none';
+      return;
+    }
+    if (noData) noData.classList.add('hidden');
+    canvas.style.display = '';
+
+    // Linear regression.
+    const xs    = pts.map((_, i) => i);
+    const ys    = pts.map(p => p.value);
+    const nPts  = xs.length;
+    const sumX  = xs.reduce((a, b) => a + b, 0);
+    const sumY  = ys.reduce((a, b) => a + b, 0);
+    const sumXY = xs.reduce((a, xi, i) => a + xi * ys[i], 0);
+    const sumXX = xs.reduce((a, xi) => a + xi * xi, 0);
+    const den   = nPts * sumXX - sumX * sumX || 1;
+    const slope = (nPts * sumXY - sumX * sumY) / den;
+    const intercept = (sumY - slope * sumX) / nPts;
+    const trendLine = xs.map(xi => slope * xi + intercept);
+
+    chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: pts.map(p => p.date),
+        datasets: [
+          { label: statLabels[statKey] || 'FG%', data: pts.map(p => p.value), borderColor: player.color, backgroundColor: player.color + '20', tension: 0.2, pointRadius: 4, pointHoverRadius: 6, fill: true },
+          { label: 'Trend', data: trendLine, borderColor: '#ef4444', borderDash: [6, 4], pointRadius: 0, fill: false },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } },
+        plugins: {
+          legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } },
+        },
+      },
+    });
+  }
+
+  // Wire stat-type toggle buttons.
+  document.querySelectorAll('button[data-chart-stat]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      view.chartStat = btn.dataset.chartStat;
+      buildChart(view.chartStat);
+    });
+  });
+
+  // Wire per-game / per-day view toggle buttons.
+  document.querySelectorAll('button[data-chart-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      view.chartView = btn.dataset.chartView;
+      buildChart(view.chartStat || 'total');
+    });
+  });
+
+  // Draw initial chart.
+  buildChart(view.chartStat || 'total');
+}
+
+function playerHeader(player, gp, wins, losses, ties, winPct) {
+  return `
+    <header class="flex items-center gap-4">
+      <span class="w-12 h-12 rounded-full inline-flex items-center justify-center text-base font-semibold"
+            style="background:${player.color}20; color:${player.color};">
+        ${escapeHtml(player.abbr || player.name.slice(0,2).toUpperCase())}
+      </span>
+      <div class="flex-1">
+        <h1 class="text-2xl font-semibold">${escapeHtml(player.name)}</h1>
+        <p class="text-xs text-gray-500 mt-0.5">
+          ${gp} games · ${wins}W – ${losses}L${ties > 0 ? ` – ${ties}T` : ''}
+          ${gp > 0 ? ` (${winPct.toFixed(1)}%)` : ''}
+        </p>
+      </div>
+      <button type="button" class="text-sm text-gray-500 hover:underline" data-go="players">← Roster</button>
+    </header>
+  `;
+}
+
+// ============================================================
+// VIEW: Import (CSV + image OCR)
+// ============================================================
+let importState = {
+  csvText: '',
+  parsed: null,    // { games, errors }
+  imageDataUrl: null,
+  ocrText: '',
+  ocrStatus: '',   // 'idle' | 'loading-lib' | 'running' | 'done' | 'error'
+  ocrError: '',
+  lastImportSummary: '', // e.g. "Imported 3 games and 2 new players."
+};
+
+const CSV_TEMPLATE_HEADERS = [
+  'date','season','scoring','format','target','team','player','scoreA','scoreB','notes',
+  'shortMade','shortAtt','longMade','longAtt',
+  'contShortMade','contShortAtt','contLongMade','contLongAtt',
+  'offReb','defReb','ast','stl','blk','to',
+  // Shot zones (optional — leave entire group blank to mark zones as untracked for the game)
+  'zoneCloseMade','zoneCloseAtt','zoneMidMade','zoneMidAtt','zoneLongMade','zoneLongAtt',
+  'contZoneCloseMade','contZoneCloseAtt','contZoneMidMade','contZoneMidAtt','contZoneLongMade','contZoneLongAtt',
+];
+
+function renderImport() {
+  const parsed = importState.parsed;
+  const errCount = parsed ? parsed.errors.length : 0;
+  const gameCount = parsed ? parsed.games.length : 0;
+
+  return `
+    <div class="space-y-8">
+      <div>
+        <h1 class="text-xl font-semibold mb-1">Import games</h1>
+        <p class="text-sm text-gray-600">Add games in bulk from a CSV file, or extract text from a stat sheet image and reformat it as CSV.</p>
+      </div>
+
+      ${importState.lastImportSummary ? `
+        <div class="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">${escapeHtml(importState.lastImportSummary)}</div>
+      ` : ''}
+
+      <section class="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+        <div class="flex items-baseline justify-between flex-wrap gap-2">
+          <h2 class="text-sm font-semibold">From CSV</h2>
+          <button type="button" id="csv-template-btn" class="text-xs text-blue-700 hover:underline">⬇ Download template</button>
+        </div>
+        <p class="text-xs text-gray-500">
+          One row per player per game. Rows that share the same <span class="font-mono">date</span> + <span class="font-mono">scoreA</span> + <span class="font-mono">scoreB</span> are grouped into a single game.
+          Players that don't exist yet will be created automatically. Same for seasons.
+          Leave a stat group's columns blank for a game where you didn't track it — those will be saved as N/A.
+        </p>
+        <p class="text-xs text-gray-500">
+          <span class="font-medium text-gray-600">Combined wide-format reports</span> (one row per game, with each player's stats in their own block of columns —
+          e.g. a "Combined Report" export with <span class="font-mono">Game ID, Date, Type, Team 1, Team 2, ...</span> followed by per-player <span class="font-mono">1Pt Att / 1Pt Made / 2Pt Att / 2Pt Made / Reb Off / Reb Def / Assists / Steals / Blocks / TOs</span> blocks)
+          are detected automatically — just upload or paste the file as-is. Dashes (<span class="font-mono">—</span>) mark a player who didn't play that game.
+          Multiple games on the same date get numbered "Game #" automatically based on their order in the file.
+        </p>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <input type="file" id="csv-file" accept=".csv,text/csv" class="hidden">
+          <button type="button" id="csv-pick-btn" class="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50">⬆ Upload CSV</button>
+          <span class="text-xs text-gray-500">or paste below:</span>
+        </div>
+
+        <textarea id="csv-text" rows="6" class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs font-mono"
+          placeholder="date,season,scoring,format,target,team,player,scoreA,scoreB,notes,shortMade,shortAtt,longMade,longAtt,...">${escapeHtml(importState.csvText)}</textarea>
+
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="csv-parse-btn" class="text-sm bg-gray-100 border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-200">Parse &amp; preview</button>
+          <button type="button" id="csv-clear-btn" class="text-sm text-gray-500 hover:underline">Clear</button>
+        </div>
+
+        ${parsed ? `
+          <div class="border border-gray-200 rounded p-3 space-y-2">
+            <div class="text-xs">
+              <span class="font-medium">${gameCount}</span> game${gameCount===1?'':'s'} parsed,
+              <span class="font-medium ${errCount?'text-red-700':''}">${errCount}</span> issue${errCount===1?'':'s'}.
+            </div>
+            ${errCount > 0 ? `
+              <ul class="text-xs text-red-700 list-disc pl-5 space-y-0.5">
+                ${parsed.errors.slice(0, 10).map(e => `<li>${escapeHtml(e)}</li>`).join('')}
+                ${parsed.errors.length > 10 ? `<li>… and ${parsed.errors.length - 10} more</li>` : ''}
+              </ul>
+            ` : ''}
+            ${gameCount > 0 ? `
+              <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                  <thead class="text-gray-500"><tr>
+                    <th class="text-left py-1 font-medium">Date</th>
+                    <th class="text-left py-1 font-medium">Season</th>
+                    <th class="text-left py-1 font-medium">Score</th>
+                    <th class="text-left py-1 font-medium">Players</th>
+                    <th class="text-left py-1 font-medium">Tracked</th>
+                  </tr></thead>
+                  <tbody>
+                    ${parsed.games.map(g => {
+                      const teamA = g.rows.filter(r => r.team === 'A').map(r => r.player).join(', ');
+                      const teamB = g.rows.filter(r => r.team === 'B').map(r => r.player).join(', ');
+                      const trackedKeys = ['contested','rebounds','ast','stl','blk','to','zones'];
+                      const tracked = trackedKeys.filter(k => g.tracked[k]);
+                      return `
+                        <tr class="border-t border-gray-100">
+                          <td class="py-1">${escapeHtml(g.playedAt)}</td>
+                          <td class="py-1">${escapeHtml(g.season || '—')}</td>
+                          <td class="py-1 tabular-nums">${g.scoreA}–${g.scoreB}</td>
+                          <td class="py-1">${escapeHtml(teamA)} <span class="text-gray-400">vs</span> ${escapeHtml(teamB)}</td>
+                          <td class="py-1 text-gray-600">${tracked.length === trackedKeys.length ? 'all' : (tracked.join(', ') || 'shooting only')}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+              <button type="button" id="csv-commit-btn" class="bg-blue-700 text-white rounded px-3 py-1.5 text-sm hover:bg-blue-800">Import ${gameCount} game${gameCount===1?'':'s'}</button>
+            ` : ''}
+          </div>
+        ` : ''}
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+        <h2 class="text-sm font-semibold">From image (OCR)</h2>
+        <p class="text-xs text-gray-500">
+          Upload a photo of a stat sheet. We'll run OCR via Tesseract.js — it works decently on printed/typed sheets and is unreliable on handwriting.
+          Use the extracted text as a starting point: edit it into the CSV format above (or copy specific values into the Log game form), then import.
+        </p>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <input type="file" id="ocr-file" accept="image/*" class="hidden">
+          <button type="button" id="ocr-pick-btn" class="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50">⬆ Upload image</button>
+          ${importState.imageDataUrl ? `<button type="button" id="ocr-rerun-btn" class="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50">↻ Re-run OCR</button>` : ''}
+          ${importState.ocrStatus === 'loading-lib' ? `<span class="text-xs text-gray-500">Loading OCR engine…</span>` : ''}
+          ${importState.ocrStatus === 'running'     ? `<span class="text-xs text-gray-500">Reading image…</span>` : ''}
+          ${importState.ocrStatus === 'error'       ? `<span class="text-xs text-red-700">OCR error: ${escapeHtml(importState.ocrError)}</span>` : ''}
+        </div>
+
+        ${importState.imageDataUrl ? `
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <div class="section-h mb-1.5">Image</div>
+              <img src="${importState.imageDataUrl}" alt="uploaded stat sheet" class="border border-gray-200 rounded max-w-full">
+            </div>
+            <div>
+              <div class="section-h mb-1.5">Extracted text (editable)</div>
+              <textarea id="ocr-text" rows="14" class="w-full border border-gray-300 rounded px-2 py-1.5 text-xs font-mono"
+                placeholder="${importState.ocrStatus === 'running' || importState.ocrStatus === 'loading-lib' ? 'Working on it…' : 'OCR text will appear here'}">${escapeHtml(importState.ocrText)}</textarea>
+              <div class="flex flex-wrap gap-2 mt-2">
+                <button type="button" id="ocr-to-csv-btn" class="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50">Send text to CSV box ↑</button>
+                <button type="button" id="ocr-clear-btn" class="text-sm text-gray-500 hover:underline">Clear image</button>
+              </div>
+              <p class="text-[11px] text-gray-400 mt-2">Tip: handwritten numbers often come back wrong. Compare against the image and clean it into CSV columns matching the template before importing.</p>
+            </div>
+          </div>
+        ` : ''}
+      </section>
+    </div>
+  `;
+}
+
+function wireImport() {
+  document.querySelectorAll('button[data-go]').forEach(btn => {
+    btn.addEventListener('click', () => go({ name: btn.dataset.go }));
+  });
+
+  // Template download
+  const tplBtn = document.getElementById('csv-template-btn');
+  if (tplBtn) tplBtn.addEventListener('click', downloadCsvTemplate);
+
+  // CSV file upload
+  const csvFile = document.getElementById('csv-file');
+  const csvPick = document.getElementById('csv-pick-btn');
+  if (csvPick && csvFile) {
+    csvPick.addEventListener('click', () => csvFile.click());
+    csvFile.addEventListener('change', async () => {
+      const f = csvFile.files?.[0];
+      if (!f) return;
+      const text = await f.text();
+      importState.csvText = text;
+      importState.parsed = parseAnyCsv(text);
+      render();
+    });
+  }
+
+  // Live edit of the CSV textarea
+  const csvText = document.getElementById('csv-text');
+  if (csvText) {
+    csvText.addEventListener('input', () => { importState.csvText = csvText.value; });
+  }
+
+  // Parse button
+  const parseBtn = document.getElementById('csv-parse-btn');
+  if (parseBtn) parseBtn.addEventListener('click', () => {
+    importState.parsed = parseAnyCsv(importState.csvText);
+    render();
+  });
+
+  // Clear button
+  const clearBtn = document.getElementById('csv-clear-btn');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    importState.csvText = '';
+    importState.parsed = null;
+    render();
+  });
+
+  // Commit button
+  const commitBtn = document.getElementById('csv-commit-btn');
+  if (commitBtn) commitBtn.addEventListener('click', () => {
+    if (!importState.parsed) return;
+    const summary = commitImportedGames(importState.parsed);
+    importState.lastImportSummary = summary;
+    importState.csvText = '';
+    importState.parsed = null;
+    saveState();
+    render();
+  });
+
+  // Image upload
+  const ocrFile = document.getElementById('ocr-file');
+  const ocrPick = document.getElementById('ocr-pick-btn');
+  if (ocrPick && ocrFile) {
+    ocrPick.addEventListener('click', () => ocrFile.click());
+    ocrFile.addEventListener('change', async () => {
+      const f = ocrFile.files?.[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        importState.imageDataUrl = reader.result;
+        importState.ocrText = '';
+        importState.ocrError = '';
+        render();
+        await runOcr(f);
+      };
+      reader.readAsDataURL(f);
+    });
+  }
+
+  const rerun = document.getElementById('ocr-rerun-btn');
+  if (rerun) rerun.addEventListener('click', async () => {
+    if (!importState.imageDataUrl) return;
+    // Convert data URL back to a Blob for Tesseract
+    const blob = await (await fetch(importState.imageDataUrl)).blob();
+    await runOcr(blob);
+  });
+
+  const ocrText = document.getElementById('ocr-text');
+  if (ocrText) {
+    ocrText.addEventListener('input', () => { importState.ocrText = ocrText.value; });
+  }
+
+  const sendBtn = document.getElementById('ocr-to-csv-btn');
+  if (sendBtn) sendBtn.addEventListener('click', () => {
+    importState.csvText = (importState.csvText ? importState.csvText.trimEnd() + '\n' : '') + (importState.ocrText || '');
+    render();
+  });
+
+  const ocrClear = document.getElementById('ocr-clear-btn');
+  if (ocrClear) ocrClear.addEventListener('click', () => {
+    importState.imageDataUrl = null;
+    importState.ocrText = '';
+    importState.ocrStatus = '';
+    importState.ocrError = '';
+    render();
+  });
+}
+
+// --- CSV parser ---------------------------------------------------------
+function parseCsv(text) {
+  const rows = [];
+  let cur = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"' && text[i+1] === '"') { cell += '"'; i++; continue; }
+      if (c === '"') { inQuotes = false; continue; }
+      cell += c;
+      continue;
+    }
+    if (c === '"') { inQuotes = true; continue; }
+    if (c === ',') { cur.push(cell); cell = ''; continue; }
+    if (c === '\r') continue;
+    if (c === '\n') { cur.push(cell); rows.push(cur); cur = []; cell = ''; continue; }
+    cell += c;
+  }
+  if (cell.length > 0 || cur.length > 0) { cur.push(cell); rows.push(cur); }
+  return rows.filter(r => r.some(c => c && c.trim().length > 0));
+}
+
+// --- Combined wide-format report parser ---------------------------------
+// Detects exports like "Basketball Game Stats — Combined Report": one row per
+// game, with each player's stats laid out in their own block of columns across
+// the row (player name spans a header row, stat labels in the row beneath it).
+function looksLikeCombinedReport(rows) {
+  if (rows.length < 3) return false;
+  const r0 = (rows[0]?.[0] || '');
+  const r1 = (rows[1]?.[0] || '');
+  // Two known layouts:
+  //  - title row "Basketball Game Stats — Combined Report" then a "GAME INFORMATION" name row
+  //  - "GAME INFORMATION" itself doubles as the name row's first cell (no separate title row)
+  return /combined report/i.test(r0) || /game information/i.test(r1) || /game information/i.test(r0);
+}
+
+function parseCombinedReportCsv(rows) {
+  const errors = [];
+
+  // The "GAME INFORMATION" row is the player-name row — it may be row 0 (no title row above it)
+  // or row 1 (with a "Basketball Game Stats — Combined Report" title row above it).
+  let nameRowIdx = rows.findIndex((r, i) => i < 3 && /game information/i.test((r?.[0] || '')));
+  if (nameRowIdx < 0) nameRowIdx = 1; // fall back to the previously-assumed layout
+
+  if (rows.length < nameRowIdx + 3) {
+    return { games: [], errors: ['Combined report needs a player-name row, a stat-header row, and at least one game row.'] };
+  }
+
+  const nameRow   = rows[nameRowIdx];     // player names spanning column groups
+  const headerRow = rows[nameRowIdx + 1]; // per-column stat labels (Game ID, Date, ... 1Pt Att, 1Pt Made, ...)
+
+  // Find where the per-player column blocks start: first non-empty name after col 0.
+  let firstPlayerCol = -1;
+  for (let c = 1; c < nameRow.length; c++) {
+    if ((nameRow[c] || '').trim()) { firstPlayerCol = c; break; }
+  }
+  if (firstPlayerCol < 0) return { games: [], errors: ['Could not find player-name columns (row 2).'] };
+
+  // Carve the row into per-player blocks based on where each name starts.
+  const playerBlocks = [];
+  for (let c = firstPlayerCol; c < nameRow.length; c++) {
+    const name = (nameRow[c] || '').trim();
+    if (name) {
+      if (playerBlocks.length) playerBlocks[playerBlocks.length - 1].end = c;
+      playerBlocks.push({ name, start: c, end: nameRow.length });
+    }
+  }
+  if (!playerBlocks.length) return { games: [], errors: ['No player columns found (row 2).'] };
+
+  // Map each block's stat-label columns to our internal keys (template = first block).
+  const STAT_LABELS = {
+    '1pt att': 'shortAtt', '1pt made': 'shortMade',
+    'c1pt att': 'contShortAtt', 'c1pt made': 'contShortMade',
+    '2pt att': 'longAtt',  '2pt made': 'longMade',
+    'c2pt att': 'contLongAtt', 'c2pt made': 'contLongMade',
+    'reb off': 'offReb',   'reb def':  'defReb',
+    'assists': 'ast', 'steals': 'stl', 'blocks': 'blk', 'tos': 'to',
+  };
+  const offsets = {};
+  const tmpl = playerBlocks[0];
+  for (let c = tmpl.start; c < tmpl.end; c++) {
+    const lbl = (headerRow[c] || '').trim().toLowerCase();
+    if (STAT_LABELS[lbl] !== undefined) offsets[STAT_LABELS[lbl]] = c - tmpl.start;
+  }
+  if (offsets.shortAtt === undefined) {
+    return { games: [], errors: ['Could not find a "1Pt Att" column inside a player block (row 3).'] };
+  }
+
+  // Game-info column lookup (everything left of the first player block).
+  const giIdx = {};
+  for (let c = 0; c < firstPlayerCol; c++) {
+    giIdx[(headerRow[c] || '').trim().toLowerCase()] = c;
+  }
+  const col = (row, label) => giIdx[label] != null ? (row[giIdx[label]] || '').trim() : '';
+
+  const hasOffReb = offsets.offReb !== undefined;
+  const hasDefReb = offsets.defReb !== undefined;
+  const hasContested = offsets.contShortAtt !== undefined || offsets.contShortMade !== undefined
+    || offsets.contLongAtt !== undefined || offsets.contLongMade !== undefined;
+  const hasAst = offsets.ast !== undefined;
+  const hasStl = offsets.stl !== undefined;
+  const hasBlk = offsets.blk !== undefined;
+  const hasTo  = offsets.to  !== undefined;
+
+  const num = s => { const v = parseInt(s, 10); return Number.isNaN(v) ? 0 : v; };
+  const orderByDate = new Map();
+  const games = [];
+
+  for (let r = nameRowIdx + 2; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.every(c => !c || !c.trim())) continue;
+
+    const gameId    = col(row, 'game id');
+    const dateRaw   = col(row, 'date');
+    const typeRaw   = col(row, 'type');
+    const type      = ['1v1','2v2','3v3','4v4','5v5'].includes(typeRaw) ? typeRaw : '2v2';
+    const team1Raw  = col(row, 'team 1');
+    const team2Raw  = col(row, 'team 2');
+    const scoreA    = num(col(row, 't1 score'));
+    const scoreB    = num(col(row, 't2 score'));
+    const winnerRaw = col(row, 'winner');
+
+    if (!dateRaw) { errors.push(`Row ${r + 1}: missing date — skipped`); continue; }
+
+    // M/D/YYYY -> YYYY-MM-DD
+    const dm = dateRaw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    const playedAt = dm ? `${dm[3]}-${dm[1].padStart(2, '0')}-${dm[2].padStart(2, '0')}` : dateRaw;
+
+    const team1Names = team1Raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const team2Names = team2Raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const wKey = winnerRaw.trim().toLowerCase().replace(/[\s_]+/g, '_');
+    const winner = wKey === 'team_1' ? 'A' : (wKey === 'team_2' ? 'B' : (wKey === 'tie' ? 'Tie' : ''));
+
+    const gRows = [];
+    for (const pb of playerBlocks) {
+      const get = key => offsets[key] !== undefined ? (row[pb.start + offsets[key]] || '').trim() : '';
+      const rawShortAtt = get('shortAtt');
+      if (!rawShortAtt || rawShortAtt === '—' || rawShortAtt === '-') continue; // dashes = didn't play this game
+
+      const lname = pb.name.trim().toLowerCase();
+      let team = team1Names.includes(lname) ? 'A' : (team2Names.includes(lname) ? 'B' : '');
+      if (!team) { errors.push(`Row ${r + 1}: couldn't match player "${pb.name}" to a team roster — skipped`); continue; }
+
+      gRows.push({
+        player: pb.name, team,
+        shortMade: num(get('shortMade')), shortAtt: num(get('shortAtt')),
+        longMade:  num(get('longMade')),  longAtt:  num(get('longAtt')),
+        contShortMade: offsets.contShortMade !== undefined ? num(get('contShortMade')) : null,
+        contShortAtt:  offsets.contShortAtt  !== undefined ? num(get('contShortAtt'))  : null,
+        contLongMade:  offsets.contLongMade  !== undefined ? num(get('contLongMade'))  : null,
+        contLongAtt:   offsets.contLongAtt   !== undefined ? num(get('contLongAtt'))   : null,
+        offReb: num(get('offReb')), defReb: num(get('defReb')),
+        ast: num(get('ast')), stl: num(get('stl')), blk: num(get('blk')), to: num(get('to')),
+        zoneCloseMade: null, zoneCloseAtt: null, zoneMidMade: null, zoneMidAtt: null, zoneLongMade: null, zoneLongAtt: null,
+        contZoneCloseMade: null, contZoneCloseAtt: null, contZoneMidMade: null, contZoneMidAtt: null, contZoneLongMade: null, contZoneLongAtt: null,
+      });
+    }
+
+    if (gRows.length < 2) { errors.push(`Row ${r + 1}: fewer than 2 players matched a team roster — skipped`); continue; }
+
+    const ord = (orderByDate.get(playedAt) || 0) + 1;
+    orderByDate.set(playedAt, ord);
+
+    games.push({
+      playedAt,
+      order: ord,
+      scoreA, scoreB,
+      winner,
+      season: '',
+      scoring: '1-2',
+      format: type,
+      target: 21,
+      notes: gameId ? `Imported from combined report — Game ID ${gameId}` : '',
+      rows: gRows,
+      tracked: {
+        contested: hasContested,
+        rebounds: hasOffReb || hasDefReb,
+        ast: hasAst, stl: hasStl, blk: hasBlk, to: hasTo,
+        zones: false,
+      },
+    });
+  }
+
+  return { games, errors };
+}
+
+// Auto-detect which CSV shape we're given and parse accordingly.
+function parseAnyCsv(text) {
+  const rows = parseCsv(text);
+  return looksLikeCombinedReport(rows) ? parseCombinedReportCsv(rows) : processCsvRows(rows);
+}
+
+function processCsvRows(rows) {
+  if (rows.length < 2) return { games: [], errors: ['Need a header row and at least one data row.'] };
+  const headers = rows[0].map(h => h.trim().toLowerCase());
+  const findCol = (...names) => {
+    for (const n of names) {
+      const i = headers.indexOf(n.toLowerCase());
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const errors = [];
+  const required = [
+    ['date'], ['player'], ['team'], ['scorea','score_a','score a'], ['scoreb','score_b','score b'],
+    ['shortmade','short_made','short made'], ['shortatt','short_att','short attempts'],
+    ['longmade','long_made'], ['longatt','long_att'],
+  ];
+  for (const aliases of required) {
+    if (!aliases.some(a => headers.includes(a))) {
+      errors.push(`Missing required column: ${aliases[0]}`);
+    }
+  }
+  if (errors.length) return { games: [], errors };
+
+  const idx = {
+    date: findCol('date'),
+    player: findCol('player','name'),
+    team: findCol('team'),
+    scoreA: findCol('scorea','score_a','score a'),
+    scoreB: findCol('scoreb','score_b','score b'),
+    season: findCol('season'),
+    scoring: findCol('scoring'),
+    format: findCol('format'),
+    target: findCol('target','rulescore','rule_score'),
+    notes: findCol('notes'),
+    gameKey: findCol('game_key','gamekey'),
+    shortMade: findCol('shortmade','short_made'),
+    shortAtt:  findCol('shortatt','short_att'),
+    longMade:  findCol('longmade','long_made'),
+    longAtt:   findCol('longatt','long_att'),
+    contShortMade: findCol('contshortmade','cont_short_made','cont_shortmade'),
+    contShortAtt:  findCol('contshortatt','cont_short_att','cont_shortatt'),
+    contLongMade:  findCol('contlongmade','cont_long_made','cont_longmade'),
+    contLongAtt:   findCol('contlongatt','cont_long_att','cont_longatt'),
+    offReb: findCol('offreb','off_reb','offensive_rebounds','off rebounds'),
+    defReb: findCol('defreb','def_reb','defensive_rebounds','def rebounds'),
+    ast: findCol('ast','assists'),
+    stl: findCol('stl','steals'),
+    blk: findCol('blk','blocks'),
+    to:  findCol('to','tov','turnover','turnovers'),
+  };
+
+  const cellAt = (row, key) => idx[key] >= 0 ? (row[idx[key]] || '').trim() : '';
+  const numOrNull = s => s === '' ? null : (Number.isNaN(parseInt(s)) ? null : parseInt(s));
+
+  const gameMap = new Map();
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const date = cellAt(row, 'date');
+    const player = cellAt(row, 'player');
+    const team = cellAt(row, 'team').toUpperCase();
+    const scoreA = parseInt(cellAt(row, 'scoreA')) || 0;
+    const scoreB = parseInt(cellAt(row, 'scoreB')) || 0;
+    if (!date) { errors.push(`Row ${i+1}: missing date`); continue; }
+    if (!player) { errors.push(`Row ${i+1}: missing player`); continue; }
+    if (!['A','B'].includes(team)) { errors.push(`Row ${i+1}: team must be A or B (got "${team}")`); continue; }
+
+    const key = idx.gameKey >= 0 && cellAt(row, 'gameKey')
+      ? cellAt(row, 'gameKey')
+      : `${date}|${scoreA}|${scoreB}`;
+
+    if (!gameMap.has(key)) {
+      gameMap.set(key, {
+        playedAt: date,
+        scoreA, scoreB,
+        season:  cellAt(row, 'season'),
+        scoring: (cellAt(row, 'scoring') || '1-2'),
+        format:  (cellAt(row, 'format')  || '2v2'),
+        target:  parseInt(cellAt(row, 'target')) || 21,
+        notes:   cellAt(row, 'notes'),
+        rows: [],
+      });
+    }
+    const g = gameMap.get(key);
+    g.rows.push({
+      player, team,
+      shortMade: numOrNull(cellAt(row, 'shortMade')) ?? 0,
+      shortAtt:  numOrNull(cellAt(row, 'shortAtt'))  ?? 0,
+      longMade:  numOrNull(cellAt(row, 'longMade'))  ?? 0,
+      longAtt:   numOrNull(cellAt(row, 'longAtt'))   ?? 0,
+      contShortMade: numOrNull(cellAt(row, 'contShortMade')),
+      contShortAtt:  numOrNull(cellAt(row, 'contShortAtt')),
+      contLongMade:  numOrNull(cellAt(row, 'contLongMade')),
+      contLongAtt:   numOrNull(cellAt(row, 'contLongAtt')),
+      offReb: numOrNull(cellAt(row, 'offReb')),
+      defReb: numOrNull(cellAt(row, 'defReb')),
+      ast: numOrNull(cellAt(row, 'ast')),
+      stl: numOrNull(cellAt(row, 'stl')),
+      blk: numOrNull(cellAt(row, 'blk')),
+      to:  numOrNull(cellAt(row, 'to')),
+      // Zones (optional)
+      zoneCloseMade: numOrNull(cellAt(row, 'zoneCloseMade')),
+      zoneCloseAtt:  numOrNull(cellAt(row, 'zoneCloseAtt')),
+      zoneMidMade:   numOrNull(cellAt(row, 'zoneMidMade')),
+      zoneMidAtt:    numOrNull(cellAt(row, 'zoneMidAtt')),
+      zoneLongMade:  numOrNull(cellAt(row, 'zoneLongMade')),
+      zoneLongAtt:   numOrNull(cellAt(row, 'zoneLongAtt')),
+      contZoneCloseMade: numOrNull(cellAt(row, 'contZoneCloseMade')),
+      contZoneCloseAtt:  numOrNull(cellAt(row, 'contZoneCloseAtt')),
+      contZoneMidMade:   numOrNull(cellAt(row, 'contZoneMidMade')),
+      contZoneMidAtt:    numOrNull(cellAt(row, 'contZoneMidAtt')),
+      contZoneLongMade:  numOrNull(cellAt(row, 'contZoneLongMade')),
+      contZoneLongAtt:   numOrNull(cellAt(row, 'contZoneLongAtt')),
+    });
+  }
+
+  const games = [];
+  for (const [, g] of gameMap) {
+    const anyContested = g.rows.some(r => r.contShortMade != null || r.contShortAtt != null || r.contLongMade != null || r.contLongAtt != null);
+    const anyRebounds  = g.rows.some(r => r.offReb != null || r.defReb != null);
+    const anyAst       = g.rows.some(r => r.ast != null);
+    const anyStl       = g.rows.some(r => r.stl != null);
+    const anyBlk       = g.rows.some(r => r.blk != null);
+    const anyTo        = g.rows.some(r => r.to  != null);
+    const anyZones     = g.rows.some(r =>
+      r.zoneCloseMade != null || r.zoneCloseAtt != null ||
+      r.zoneMidMade   != null || r.zoneMidAtt   != null ||
+      r.zoneLongMade  != null || r.zoneLongAtt  != null ||
+      r.contZoneCloseMade != null || r.contZoneCloseAtt != null ||
+      r.contZoneMidMade   != null || r.contZoneMidAtt   != null ||
+      r.contZoneLongMade  != null || r.contZoneLongAtt  != null);
+    games.push({
+      ...g,
+      tracked: { contested: anyContested, rebounds: anyRebounds, ast: anyAst, stl: anyStl, blk: anyBlk, to: anyTo, zones: anyZones },
+    });
+  }
+
+  return { games, errors };
+}
+
+function commitImportedGames(parsed) {
+  const newPlayerNames = new Set();
+  const matchedPlayerNames = new Set();   // "CSV name → existing player name" (fuzzy matches worth a heads-up)
+  const ambiguousPlayerNames = new Set(); // CSV names that matched more than one existing player
+  const newSeasonNames = new Set();
+  let added = 0;
+
+  const findOrCreatePlayer = name => {
+    const n = name.trim();
+    const nLower = n.toLowerCase();
+
+    // 1. Exact full-name match (case-insensitive).
+    let p = state.players.find(x => x.name.trim().toLowerCase() === nLower);
+
+    // 2. Fuzzy match: CSV name equals a "word" in the player's full name (first/last/nickname),
+    //    or matches their abbreviation. Handles imports that use short/first names (e.g. "ERCE")
+    //    against a roster stored with full names (e.g. "Erce Savas").
+    if (!p) {
+      const candidates = state.players.filter(x => {
+        const words = x.name.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        return words.includes(nLower) || (x.abbr || '').trim().toLowerCase() === nLower;
+      });
+      if (candidates.length === 1) {
+        p = candidates[0];
+        matchedPlayerNames.add(`${n} → ${p.name}`);
+      } else if (candidates.length > 1) {
+        // Ambiguous — prefer a player whose name *starts* with the CSV name (most likely the first name).
+        p = candidates.find(x => x.name.trim().toLowerCase().startsWith(nLower)) || candidates[0];
+        matchedPlayerNames.add(`${n} → ${p.name}`);
+        ambiguousPlayerNames.add(n);
+      }
+    }
+
+    if (!p) {
+      p = {
+        id: uid(),
+        name: n,
+        abbr: n.slice(0, 2).toUpperCase(),
+        color: COLORS[state.players.length % COLORS.length],
+        createdAt: new Date().toISOString(),
+      };
+      state.players.push(p);
+      newPlayerNames.add(n);
+    }
+    return p;
+  };
+
+  const findOrCreateSeason = name => {
+    const n = (name || '').trim();
+    if (!n) return null;
+    let s = state.seasons.find(x => x.name.toLowerCase() === n.toLowerCase());
+    if (!s) {
+      s = { id: uid(), name: n, createdAt: new Date().toISOString() };
+      state.seasons.push(s);
+      newSeasonNames.add(n);
+    }
+    return s.id;
+  };
+
+  for (const g of parsed.games) {
+    const seasonId = findOrCreateSeason(g.season);
+    const playedAt = g.playedAt.length === 10 ? g.playedAt + 'T12:00:00' : g.playedAt;
+    const tr = g.tracked;
+    state.games.push({
+      id: uid(),
+      playedAt: new Date(playedAt).toISOString(),
+      order: g.order || 1,
+      format: g.format || '2v2',
+      scoring: g.scoring === '2-3' ? '2-3' : '1-2',
+      ruleScore: g.target || 21,
+      scoreA: g.scoreA,
+      scoreB: g.scoreB,
+      winner: g.winner || null,
+      notes: g.notes || '',
+      seasonId,
+      tracked: { ...tr },
+      stats: g.rows.map(r => ({
+        playerId: findOrCreatePlayer(r.player).id,
+        team: r.team,
+        shortMade: r.shortMade || 0,
+        shortAtt:  r.shortAtt  || 0,
+        longMade:  r.longMade  || 0,
+        longAtt:   r.longAtt   || 0,
+        contShortMade: tr.contested ? (r.contShortMade || 0) : 0,
+        contShortAtt:  tr.contested ? (r.contShortAtt  || 0) : 0,
+        contLongMade:  tr.contested ? (r.contLongMade  || 0) : 0,
+        contLongAtt:   tr.contested ? (r.contLongAtt   || 0) : 0,
+        offReb: tr.rebounds ? (r.offReb || 0) : 0,
+        defReb: tr.rebounds ? (r.defReb || 0) : 0,
+        ast: tr.ast ? (r.ast || 0) : 0,
+        stl: tr.stl ? (r.stl || 0) : 0,
+        blk: tr.blk ? (r.blk || 0) : 0,
+        to:  tr.to  ? (r.to  || 0) : 0,
+        zoneCloseMade: tr.zones ? (r.zoneCloseMade || 0) : 0,
+        zoneCloseAtt:  tr.zones ? (r.zoneCloseAtt  || 0) : 0,
+        zoneMidMade:   tr.zones ? (r.zoneMidMade   || 0) : 0,
+        zoneMidAtt:    tr.zones ? (r.zoneMidAtt    || 0) : 0,
+        zoneLongMade:  tr.zones ? (r.zoneLongMade  || 0) : 0,
+        zoneLongAtt:   tr.zones ? (r.zoneLongAtt   || 0) : 0,
+        contZoneCloseMade: tr.zones ? (r.contZoneCloseMade || 0) : 0,
+        contZoneCloseAtt:  tr.zones ? (r.contZoneCloseAtt  || 0) : 0,
+        contZoneMidMade:   tr.zones ? (r.contZoneMidMade   || 0) : 0,
+        contZoneMidAtt:    tr.zones ? (r.contZoneMidAtt    || 0) : 0,
+        contZoneLongMade:  tr.zones ? (r.contZoneLongMade  || 0) : 0,
+        contZoneLongAtt:   tr.zones ? (r.contZoneLongAtt   || 0) : 0,
+      })),
+    });
+    added++;
+  }
+
+  const parts = [`Imported ${added} game${added===1?'':'s'}`];
+  if (matchedPlayerNames.size) parts.push(`matched ${matchedPlayerNames.size} player name${matchedPlayerNames.size===1?'':'s'} to existing players (${[...matchedPlayerNames].join(', ')})`);
+  if (newPlayerNames.size) parts.push(`created ${newPlayerNames.size} new player${newPlayerNames.size===1?'':'s'} (${[...newPlayerNames].join(', ')})`);
+  if (newSeasonNames.size) parts.push(`created ${newSeasonNames.size} new season${newSeasonNames.size===1?'':'s'} (${[...newSeasonNames].join(', ')})`);
+  let summary = parts.join(', ') + '.';
+  if (ambiguousPlayerNames.size) {
+    summary += ` ⚠ Heads up: ${[...ambiguousPlayerNames].join(', ')} matched more than one existing player — double-check those games picked the right person.`;
+  }
+  return summary;
+}
+
+function downloadCsvTemplate() {
+  const headers = CSV_TEMPLATE_HEADERS;
+  const samples = [
+    // Sample game with zones tracked. Leave the zone columns blank if you don't want to track zones.
+    ['2026-05-01','Summer 2026','1-2','3v3','21','A','RJ','21','15','example row','4','8','2','5','1','3','1','2','2','3','3','1','0','2',
+      '2','3','1','3','1','2','0','1','1','2','0','1'],
+    ['2026-05-01','Summer 2026','1-2','3v3','21','A','Mike','21','15','example row','3','6','1','4','0','2','0','1','1','2','2','0','0','1',
+      '2','3','1','2','0','1','0','1','1','1','0','1'],
+    ['2026-05-01','Summer 2026','1-2','3v3','21','B','Sam','21','15','example row','2','7','3','5','1','2','1','2','2','1','1','2','1','3',
+      '1','3','0','2','1','2','0','1','0','1','0','1'],
+    ['2026-05-01','Summer 2026','1-2','3v3','21','B','Lex','21','15','example row','4','9','1','3','0','1','0','1','0','3','2','1','0','2',
+      '3','5','1','3','0','1','0','2','0','1','0','1'],
+  ];
+  const lines = [headers, ...samples].map(r =>
+    r.map(c => /[",\n]/.test(c) ? `"${String(c).replaceAll('"','""')}"` : c).join(',')
+  );
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'hoopstats-template.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// --- OCR ----------------------------------------------------------------
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement('script');
+    s.src = src; s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function runOcr(blobOrFile) {
+  importState.ocrText = '';
+  importState.ocrError = '';
+  importState.ocrStatus = 'loading-lib';
+  // Re-render this section only (avoid wiping the textarea while typing elsewhere is moot here)
+  if (view.name === 'import') render();
+  try {
+    if (!window.Tesseract) {
+      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+    }
+    importState.ocrStatus = 'running';
+    if (view.name === 'import') render();
+    const { data } = await window.Tesseract.recognize(blobOrFile, 'eng');
+    importState.ocrText = data.text || '';
+    importState.ocrStatus = 'done';
+  } catch (e) {
+    importState.ocrError = e.message || String(e);
+    importState.ocrStatus = 'error';
+  }
+  if (view.name === 'import') render();
+}
+
+// ============================================================
+// VIEW: Backup (export, import, snapshots)
+// ============================================================
+let backupState = {
+  importError: '',
+  importPreview: null, // { players, games, seasons, raw }
+  message: '',
+};
+
+function renderBackup() {
+  const snaps = loadSnapshots();
+  const ts = new Date();
+  const today = ts.toISOString().slice(0, 10);
+  const counts = `${state.players.length} players · ${state.games.length} games · ${state.seasons.length} seasons`;
+
+  const previewBlock = backupState.importPreview ? `
+    <div class="mt-3 border border-amber-300 bg-amber-50 rounded-lg p-3 text-sm">
+      <div class="font-medium text-amber-900 mb-1">Ready to restore</div>
+      <div class="text-amber-900">
+        ${backupState.importPreview.players.length} players ·
+        ${backupState.importPreview.games.length} games ·
+        ${backupState.importPreview.seasons.length} seasons
+      </div>
+      <div class="text-xs text-amber-800 mt-1">
+        This will <strong>replace</strong> your current data. A snapshot of your current state will be saved first so you can undo it.
+      </div>
+      <div class="flex gap-2 mt-3">
+        <button id="confirm-restore" class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm hover:bg-amber-700">Replace data</button>
+        <button id="cancel-restore" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50">Cancel</button>
+      </div>
+    </div>` : '';
+
+  const errBlock = backupState.importError
+    ? `<div class="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">${backupState.importError}</div>`
+    : '';
+
+  const msgBlock = backupState.message
+    ? `<div class="mt-3 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">${backupState.message}</div>`
+    : '';
+
+  const snapsList = snaps.length === 0
+    ? `<div class="text-sm text-gray-500 italic">No snapshots yet. One is saved automatically every time you change data.</div>`
+    : `<ul class="divide-y divide-gray-200">
+        ${snaps.map(s => {
+          const d = new Date(s.ts);
+          const when = d.toLocaleString();
+          return `
+            <li class="py-2 flex items-center gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-gray-900">${when}</div>
+                <div class="text-xs text-gray-500">${s.players} players · ${s.games} games · <span class="italic">${s.label}</span></div>
+              </div>
+              <button data-restore="${s.id}" class="px-2 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50">Restore</button>
+              <button data-snapdl="${s.id}" class="px-2 py-1 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50">Download</button>
+            </li>`;
+        }).join('')}
+      </ul>`;
+
+  return `
+    <div class="space-y-6">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-900">Backup &amp; restore</h2>
+        <p class="text-sm text-gray-600 mt-1">
+          Your data lives in this browser. Export a JSON backup periodically and keep it in a safe spot
+          (Drive, Dropbox, a thumb drive). You can restore from a backup file or from one of the recent in-browser snapshots below.
+        </p>
+        <div class="text-xs text-gray-500 mt-2">Currently in this browser: ${counts}</div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-gray-900">Export backup</h3>
+        <p class="text-xs text-gray-600 mt-1">Downloads a single JSON file containing all your players, games, and seasons.</p>
+        <div class="flex flex-wrap gap-2 mt-3">
+          <button id="btn-export" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+            Download backup (${today})
+          </button>
+          <button id="btn-copy" class="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50">
+            Copy JSON to clipboard
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-gray-900">Restore from backup file</h3>
+        <p class="text-xs text-gray-600 mt-1">Choose a previously exported <code class="text-xs bg-gray-100 px-1 rounded">.json</code> file. Your current data will be snapshotted before replacement.</p>
+        <input type="file" id="restore-file" accept=".json,application/json" class="mt-2 text-sm">
+        ${errBlock}
+        ${previewBlock}
+        ${msgBlock}
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-gray-900">Snapshots <span class="text-xs font-normal text-gray-500">(last ${SNAPSHOT_CAP})</span></h3>
+        <p class="text-xs text-gray-600 mt-1">Auto-saved every time data changes. Restore in one click if something goes wrong.</p>
+        <div class="mt-3">${snapsList}</div>
+        ${snaps.length > 0 ? `
+          <div class="mt-3 pt-3 border-t border-gray-100">
+            <button id="btn-clear-snaps" class="text-xs text-red-700 hover:underline">Clear all snapshots</button>
+          </div>` : ''}
+      </div>
+
+      <details class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm">
+        <summary class="cursor-pointer text-gray-700 font-medium">How storage works (read me)</summary>
+        <div class="mt-2 text-gray-700 space-y-1 text-xs leading-relaxed">
+          <p>Hoopstats stores everything in this browser's <code>localStorage</code> on this device. That means:</p>
+          <ul class="list-disc ml-5 space-y-1">
+            <li>It's <strong>not</strong> automatically synced to your other devices.</li>
+            <li>Clearing site data, switching browsers, or using a different machine = no data.</li>
+            <li>Snapshots above also live in this browser — they protect against accidental edits, not browser wipes.</li>
+          </ul>
+          <p>Best practice: export a backup after each game (or every few games), keep the .json in cloud storage, and restore on any device when needed.</p>
+        </div>
+      </details>
+    </div>`;
+}
+
+function wireBackup() {
+  const $ = id => document.getElementById(id);
+
+  const exportBtn = $('btn-export');
+  if (exportBtn) exportBtn.addEventListener('click', () => downloadBackup());
+
+  const copyBtn = $('btn-copy');
+  if (copyBtn) copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(buildBackupPayload(), null, 2));
+      backupState.message = 'Backup JSON copied to clipboard.';
+      backupState.importError = '';
+      render();
+    } catch (e) {
+      backupState.importError = 'Could not copy to clipboard: ' + (e.message || e);
+      render();
+    }
+  });
+
+  const fileEl = $('restore-file');
+  if (fileEl) fileEl.addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      const parsed = JSON.parse(text);
+      const validated = validateBackupShape(parsed);
+      if (validated.error) {
+        backupState.importError = validated.error;
+        backupState.importPreview = null;
+      } else {
+        backupState.importError = '';
+        backupState.importPreview = validated.data;
+        backupState.message = '';
+      }
+    } catch (err) {
+      backupState.importError = 'Could not read file: ' + (err.message || err);
+      backupState.importPreview = null;
+    }
+    render();
+  });
+
+  const confirmBtn = $('confirm-restore');
+  if (confirmBtn) confirmBtn.addEventListener('click', () => {
+    if (!backupState.importPreview) return;
+    // snapshot current first, with a clear label
+    pushSnapshot('before-restore');
+    state = {
+      players: backupState.importPreview.players,
+      games:   backupState.importPreview.games,
+      seasons: backupState.importPreview.seasons,
+    };
+    saveState({ label: 'after-restore' });
+    backupState.message = `Restored ${state.games.length} games, ${state.players.length} players.`;
+    backupState.importPreview = null;
+    backupState.importError = '';
+    render();
+  });
+
+  const cancelBtn = $('cancel-restore');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => {
+    backupState.importPreview = null;
+    backupState.importError = '';
+    render();
+  });
+
+  document.querySelectorAll('button[data-restore]').forEach(btn => {
+    btn.addEventListener('click', () => restoreSnapshot(btn.dataset.restore));
+  });
+  document.querySelectorAll('button[data-snapdl]').forEach(btn => {
+    btn.addEventListener('click', () => downloadSnapshot(btn.dataset.snapdl));
+  });
+
+  const clearBtn = $('btn-clear-snaps');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    if (!confirm('Delete all snapshots? Your current data is not affected.')) return;
+    saveSnapshots([]);
+    render();
+  });
+}
+
+function buildBackupPayload() {
+  return {
+    schema: 'hoopstats',
+    version: SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    players: state.players,
+    games: state.games,
+    seasons: state.seasons,
+  };
+}
+
+function downloadBackup() {
+  const payload = buildBackupPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const today = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `hoopstats-backup-${today}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  backupState.message = `Downloaded hoopstats-backup-${today}.json`;
+  backupState.importError = '';
+  render();
+}
+
+function downloadSnapshot(snapId) {
+  const snaps = loadSnapshots();
+  const snap = snaps.find(s => s.id === snapId);
+  if (!snap) return;
+  const payload = {
+    schema: 'hoopstats',
+    version: SCHEMA_VERSION,
+    exportedAt: new Date(snap.ts).toISOString(),
+    snapshotLabel: snap.label,
+    players: snap.state.players || [],
+    games: snap.state.games || [],
+    seasons: snap.state.seasons || [],
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date(snap.ts).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href = url;
+  a.download = `hoopstats-snapshot-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function restoreSnapshot(snapId) {
+  const snaps = loadSnapshots();
+  const snap = snaps.find(s => s.id === snapId);
+  if (!snap) return;
+  const when = new Date(snap.ts).toLocaleString();
+  if (!confirm(`Restore snapshot from ${when}? Your current data will be saved as a new snapshot first.`)) return;
+  pushSnapshot('before-snap-restore');
+  state = {
+    players: Array.isArray(snap.state.players) ? snap.state.players : [],
+    games:   Array.isArray(snap.state.games)   ? snap.state.games   : [],
+    seasons: Array.isArray(snap.state.seasons) ? snap.state.seasons : [],
+  };
+  saveState({ label: 'after-snap-restore' });
+  backupState.message = `Restored snapshot from ${when}.`;
+  render();
+}
+
+function validateBackupShape(parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    return { error: 'File is not a valid JSON object.' };
+  }
+  if (parsed.schema && parsed.schema !== 'hoopstats') {
+    return { error: `Unexpected schema "${parsed.schema}". Expected "hoopstats".` };
+  }
+  const players = Array.isArray(parsed.players) ? parsed.players : null;
+  const games   = Array.isArray(parsed.games)   ? parsed.games   : null;
+  const seasons = Array.isArray(parsed.seasons) ? parsed.seasons : [];
+  if (!players || !games) {
+    return { error: 'Backup is missing required fields (players, games).' };
+  }
+  // light shape validation
+  for (const p of players) {
+    if (!p || typeof p.id !== 'string' || typeof p.name !== 'string') {
+      return { error: 'Players list contains an invalid entry.' };
+    }
+  }
+  for (const g of games) {
+    if (!g || typeof g.id !== 'string' || !Array.isArray(g.stats)) {
+      return { error: 'Games list contains an invalid entry.' };
+    }
+  }
+  return { data: { players, games, seasons } };
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function byId(playerId) {
+  return state.players.find(p => p.id === playerId);
+}
+
+function playerGames(playerId) {
+  const out = [];
+  for (const g of state.games) {
+    const stat = g.stats.find(s => s.playerId === playerId);
+    if (stat) out.push({ game: g, stat });
+  }
+  return out;
+}
+
+function playerChip(p) {
+  return `<span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-semibold"
+                style="background:${p.color}20; color:${p.color};"
+                title="${escapeHtml(p.name)}">${escapeHtml(p.abbr || p.name.slice(0,2).toUpperCase())}</span>`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+render();
+</script>
+</body>
+</html>

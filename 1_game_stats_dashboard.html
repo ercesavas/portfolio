@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Basketball — Game Stats Dashboard (Corrected)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/3.0.1/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f8f8f6; color: #1a1a1a; padding: 1.5rem; }
+    h1 { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #666; margin-bottom: 1.5rem; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .tab { padding: 7px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; cursor: pointer; background: #fff; color: #555; }
+    .tab.active { background: #1a56db; color: #fff; border-color: #1a56db; font-weight: 500; }
+    .section { display: none; } .section.active { display: block; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-bottom: 1.25rem; }
+    .metric { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 14px; }
+    .ml { font-size: 11px; color: #666; margin-bottom: 3px; }
+    .mv { font-size: 20px; font-weight: 500; }
+    .ms { font-size: 11px; color: #888; margin-top: 2px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .ct { font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 1rem; }
+    @media (max-width: 540px) { .two { grid-template-columns: 1fr; } }
+    .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+    .bar-bg { flex: 1; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; }
+    .bg { background: #d1fae5; color: #065f46; }
+    .br { background: #fee2e2; color: #991b1b; }
+    .bi { background: #dbeafe; color: #1e40af; }
+    .ba { background: #fef3c7; color: #92400e; }
+    .player-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 1rem; }
+    .ptab { padding: 5px 11px; border: 1px solid #ddd; border-radius: 8px; font-size: 12px; cursor: pointer; background: #fff; color: #555; }
+    .ptab.active { font-weight: 600; }
+    .ch { position: relative; width: 100%; margin-bottom: 1rem; }
+    .note { font-size: 11px; color: #888; font-style: italic; margin-top: 6px; }
+    .fix-note { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: .75rem 1rem; font-size: 12px; color: #92400e; line-height: 1.6; margin-bottom: 1.25rem; }
+    .legend-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; font-size: 11px; color: #666; }
+    .leg-item { display: flex; align-items: center; gap: 5px; }
+    .leg-dot { width: 10px; height: 10px; border-radius: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 7px 8px; color: #666; font-weight: 500; border-bottom: 1px solid #e5e7eb; }
+    td { padding: 7px 8px; border-bottom: 1px solid #f5f5f5; }
+    tr:last-child td { border-bottom: none; }
+  </style>
+</head>
+<body>
+
+<h1>Basketball Stats Dashboard</h1>
+<div class="sub">66 games · 6 players · Dec 2024 – Sep 2025</div>
+
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('overview',this)">Team overview</button>
+  <button class="tab" onclick="showTab('player',this)">Player stats</button>
+  <button class="tab" onclick="showTab('shooting',this)">Shooting trends</button>
+  <button class="tab" onclick="showTab('duos',this)">Duo chemistry</button>
+  <button class="tab" onclick="showTab('records',this)">Records</button>
+  <button class="tab" onclick="showTab('rankings',this)">Shooting rankings</button>
+</div>
+
+
+<!-- ============================================================
+     TAB 1: OVERVIEW
+     ============================================================ -->
+<div id="tab-overview" class="section active">
+  <div class="metrics">
+    <div class="metric"><div class="ml">Total games</div><div class="mv">66</div></div>
+    <div class="metric"><div class="ml">Players tracked</div><div class="mv">6</div><div class="ms"></div></div>
+    <div class="metric"><div class="ml">2v2 games</div><div class="mv">57</div></div>
+    <div class="metric"><div class="ml">3v3 games</div><div class="mv">9</div></div>
+    <div class="metric"><div class="ml">First scorer wins</div><div class="mv">57.9%</div></div>
+    <div class="metric"><div class="ml">Highest eFG%</div><div class="mv">33.4%</div><div class="ms">Erce</div></div>
+  </div>
+
+  <div class="card">
+    <div class="ct">Win % — all players</div>
+    <div id="ov-win-bars"></div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="ct">eFG% — effective field goal %</div>
+      <div id="ov-efg-bars"></div>
+      <p class="note">Formula: (made_1pt + 0.5×made_2pt) / (att_1pt + att_2pt)</p>
+    </div>
+    <div class="card">
+      <div class="ct">Points per game</div>
+      <div id="ov-pts-bars"></div>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="ct">Rebounds per game</div>
+      <div id="ov-reb-bars"></div>
+    </div>
+    <div class="card">
+      <div class="ct">Assists / steals / blocks per game</div>
+      <div id="ov-misc-bars"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 2: PLAYER STATS
+     ============================================================ -->
+<div id="tab-player" class="section">
+  <div class="player-tabs" id="ptabs"></div>
+  <div class="metrics" id="p-metrics"></div>
+
+  <div class="two">
+    <div class="card">
+      <div class="ct">Shooting % breakdown</div>
+      <div id="p-shooting-bars"></div>
+    </div>
+    <div class="card">
+      <div class="ct">Career highs — single game bests</div>
+      <div id="p-highs"></div>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="ct">Win % by format (2v2 vs 3v3)</div>
+      <div id="p-format"></div>
+    </div>
+    <div class="card">
+      <div class="ct">Offensive vs defensive rebounds per game</div>
+      <div id="p-rebs"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 3: SHOOTING TRENDS — NEW
+     Per-game 1pt%, 2pt%, contested% with line of best fit
+     ============================================================ -->
+<div id="tab-shooting" class="section">
+  <div class="player-tabs" id="shoot-ptabs"></div>
+
+  <div class="card">
+    <div class="ct">1-point shooting % per game + line of best fit</div>
+    <div class="legend-row">
+      <div class="leg-item"><div class="leg-dot" style="background:#555"></div> Per-game %</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#FF6B6B;height:3px;border-radius:0"></div> Line of best fit</div>
+    </div>
+    <div class="ch" style="height:240px">
+      <canvas id="chart1pt" role="img" aria-label="1pt shooting % per game with trend line"></canvas>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="ct">2-point shooting % per game + line of best fit</div>
+      <div class="ch" style="height:220px">
+        <canvas id="chart2pt" role="img" aria-label="2pt shooting % per game with trend line"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Contested 1pt % per game + line of best fit</div>
+      <div class="ch" style="height:220px">
+        <canvas id="chartCont" role="img" aria-label="Contested 1pt shooting % per game with trend line"></canvas>
+      </div>
+      <p class="note">Contested tracking started mid-season — early games show no data.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ct">All shooting types overlaid — career averages (dashed lines)</div>
+    <div class="ch" style="height:260px">
+      <canvas id="chartOverlay" role="img" aria-label="All shooting types overlaid per game"></canvas>
+    </div>
+    <p class="note">Dashed horizontal lines = career average for each type.</p>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 4: DUO CHEMISTRY
+     ============================================================ -->
+<div id="tab-duos" class="section">
+  <div class="card">
+    <div class="ct">All duo win rates — sorted best to worst</div>
+    <table>
+      <thead><tr><th>Duo</th><th>Games</th><th>Win %</th></tr></thead>
+      <tbody id="duo-table"></tbody>
+    </table>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 5: RECORDS
+     ============================================================ -->
+<div id="tab-records" class="section">
+  <div class="metrics">
+    <div class="metric"><div class="ml">Most pts (game)</div><div class="mv" style="color:#378ADD">17</div><div class="ms">Erce — game 53</div></div>
+    <div class="metric"><div class="ml">Most rebounds</div><div class="mv" style="color:#EF9F27">34</div><div class="ms">Jalal — game 65</div></div>
+    <div class="metric"><div class="ml">Most assists</div><div class="mv" style="color:#378ADD">10</div><div class="ms">Erce — game 26</div></div>
+    <div class="metric"><div class="ml">Most steals</div><div class="mv" style="color:#E24B4A">7</div><div class="ms">Marwan — game 25</div></div>
+    <div class="metric"><div class="ml">Most blocks</div><div class="mv" style="color:#E24B4A">5</div><div class="ms">Marwan — game 8</div></div>
+    <div class="metric"><div class="ml">Best win streak</div><div class="mv" style="color:#065f46">12W</div><div class="ms">Erce</div></div>
+    <div class="metric"><div class="ml">Worst loss streak</div><div class="mv" style="color:#991b1b">11L</div><div class="ms">Jalal</div></div>
+  </div>
+  <div class="card">
+    <div class="ct">Highest-scoring games (combined)</div>
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px"><span style="font-weight:500">Game 65 (Sep 21)</span><span>Jalal &amp; Albroz vs Marwan &amp; Moe — 25–22</span></div>
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px"><span style="font-weight:500">Game 17 (Mar 20)</span><span>3v3 — 23–23 draw</span></div>
+    <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span style="font-weight:500">Game 48 (Jun 21)</span><span>Erce &amp; Albroz vs Marwan &amp; Jalal — 23–22</span></div>
+  </div>
+</div>
+
+
+<!-- ============================================================
+     TAB 6: SHOOTING RANKINGS
+     Ranks all players by each shooting category with bars,
+     medals, and a combined radar chart.
+     ============================================================ -->
+<div id="tab-rankings" class="section">
+
+  <div class="card">
+    <div class="ct">1-point shooting % — career average (open shots)</div>
+    <div id="rank-1pt"></div>
+    <p class="note">Formula: made_1pt / att_1pt across all games. Higher = better open-shot shooter from close range.</p>
+  </div>
+
+  <div class="card">
+    <div class="ct">2-point shooting % — career average (open shots)</div>
+    <div id="rank-2pt"></div>
+    <p class="note">Formula: made_2pt / att_2pt. These are longer-range attempts — lower percentages expected.</p>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="ct">Contested 1pt % — under defensive pressure</div>
+      <div id="rank-cont1pt"></div>
+      <p class="note">Only games with contested tracking (from mid-March 2025). Positive gap vs open % = holds up under pressure.</p>
+    </div>
+    <div class="card">
+      <div class="ct">Contested 2pt % — under defensive pressure</div>
+      <div id="rank-cont2pt"></div>
+      <p class="note">Harder shot with a defender present. Small samples for some players.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ct">Contested vs open gap — who holds their % under pressure? (1pt)</div>
+    <div id="rank-gap"></div>
+    <p class="note">Negative gap = shoots BETTER when contested (rare). Large positive gap = falls apart under pressure.</p>
+  </div>
+
+  <div class="card">
+    <div class="ct">Full shooting summary table — all categories ranked</div>
+    <div style="overflow-x:auto">
+      <table id="rank-table">
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>1pt %</th>
+            <th>Rank</th>
+            <th>2pt %</th>
+            <th>Rank</th>
+            <th>Cont 1pt %</th>
+            <th>Rank</th>
+            <th>Cont 2pt %</th>
+            <th>Rank</th>
+            <th>Gap (1pt)</th>
+          </tr>
+        </thead>
+        <tbody id="rank-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ct">Shooting profile radar — all categories per player</div>
+    <p style="font-size:12px;color:#666;margin-bottom:12px">Select a player to see their full shooting shape across all four categories.</p>
+    <div class="player-tabs" id="radar-ptabs"></div>
+    <div class="ch" style="height:300px">
+      <canvas id="radarChart" role="img" aria-label="Shooting profile radar chart for selected player"></canvas>
+    </div>
+  </div>
+
+</div>
+
+
+<script>
+/* ============================================================
+   COLOURS
+   ============================================================ */
+const COLORS = {
+  Erce:'#378ADD', Albroz:'#639922', Marwan:'#E24B4A',
+  Jalal:'#EF9F27', Jackson:'#7F77DD', Moe:'#1D9E75'
+};
+
+/* ============================================================
+   CAREER STATS — directly from your Basketball_Main notebook
+   Out[10] table, using your exact per-game columns.
+   eFG% recalculated from raw totals.
+   ============================================================ */
+const STATS = {
+  Erce:    { games:55, pts_pg:9.11, pct_1pt:42.5, pct_2pt:21.4, pct_1pt_cont:38.2, efg:33.4, rbs_pg:14.13, orb_pg:5.05, drb_pg:9.07, ast_pg:3.93, stl_pg:0.95, blk_pg:0.25, to_pg:1.58, win_pct:67.3, win:37, loss:18, win_2v2:70.5, win_3v3:81.8, g_2v2:44, g_3v3:11, hi_pts:17, hi_trb:25, hi_ast:10, hi_stl:4, hi_blk:2 },
+  Albroz:  { games:62, pts_pg:9.73, pct_1pt:34.9, pct_2pt:26.3, pct_1pt_cont:23.6, efg:22.3, rbs_pg:11.24, orb_pg:2.34, drb_pg:8.90, ast_pg:3.31, stl_pg:1.18, blk_pg:0.44, to_pg:1.35, win_pct:48.4, win:30, loss:32, win_2v2:47.1, win_3v3:54.5, g_2v2:51, g_3v3:11, hi_pts:17, hi_trb:21, hi_ast:10, hi_stl:5, hi_blk:3 },
+  Marwan:  { games:53, pts_pg:9.42, pct_1pt:39.7, pct_2pt:24.4, pct_1pt_cont:30.1, efg:29.0, rbs_pg:12.55, orb_pg:3.77, drb_pg:8.77, ast_pg:3.53, stl_pg:1.38, blk_pg:0.68, to_pg:1.49, win_pct:45.3, win:24, loss:29, win_2v2:52.4, win_3v3:45.5, g_2v2:42, g_3v3:11, hi_pts:17, hi_trb:27, hi_ast:9, hi_stl:7, hi_blk:5 },
+  Jalal:   { games:56, pts_pg:8.00, pct_1pt:41.3, pct_2pt:15.7, pct_1pt_cont:40.3, efg:28.1, rbs_pg:13.70, orb_pg:5.43, drb_pg:8.27, ast_pg:2.84, stl_pg:0.45, blk_pg:0.98, to_pg:1.84, win_pct:30.4, win:17, loss:39, win_2v2:34.0, win_3v3:0.0,  g_2v2:50, g_3v3:6,  hi_pts:17, hi_trb:34, hi_ast:8,  hi_stl:3, hi_blk:5 },
+  Jackson: { games:21, pts_pg:5.52, pct_1pt:27.4, pct_2pt:15.6, pct_1pt_cont:30.2, efg:19.9, rbs_pg:9.57,  orb_pg:3.52, drb_pg:6.05, ast_pg:3.95, stl_pg:1.29, blk_pg:0.33, to_pg:0.81, win_pct:47.6, win:10, loss:11, win_2v2:80.0, win_3v3:18.2, g_2v2:10, g_3v3:11, hi_pts:12, hi_trb:20, hi_ast:8,  hi_stl:3, hi_blk:2 },
+  Moe:     { games:28, pts_pg:7.11, pct_1pt:31.7, pct_2pt:18.0, pct_1pt_cont:25.4, efg:21.2, rbs_pg:10.39, orb_pg:3.57, drb_pg:6.82, ast_pg:3.43, stl_pg:0.39, blk_pg:0.07, to_pg:2.46, win_pct:42.9, win:12, loss:16, win_2v2:30.0, win_3v3:75.0, g_2v2:20, g_3v3:8,  hi_pts:13, hi_trb:17, hi_ast:8,  hi_stl:2, hi_blk:1 },
+};
+
+/* ============================================================
+   PER-GAME SHOOTING DATA
+   Extracted from your individual player XLS files.
+   null = no attempt that game (0/0 — can't compute %).
+   ============================================================ */
+const PER_GAME = {
+  Erce: {
+    pct_1pt: [36.4,37.5,44.0,25.0,62.5,29.4,40.0,53.3,75.0,40.0,53.8,47.6,64.3,36.4,70.0,42.9,41.7,44.4,50.0,26.1,14.3,26.1,25.0,27.8,28.6,35.0,44.0,58.3,41.2,46.7,42.3,16.7,42.9,50.0,52.9,33.3,57.1,27.8,30.8,41.7,40.0,46.2,60.0,42.9,36.4,50.0,55.0,66.7,46.2,40.0,66.7,61.5,53.8,55.6,54.5],
+    pct_2pt: [0.0,21.4,12.5,40.0,25.0,0.0,33.3,0.0,25.0,0.0,25.0,null,20.0,0.0,0.0,0.0,16.7,0.0,33.3,50.0,14.3,0.0,0.0,28.6,0.0,20.0,100.0,40.0,16.7,0.0,16.7,0.0,42.9,12.5,10.0,28.6,28.6,16.7,33.3,25.0,0.0,16.7,37.5,25.0,12.5,13.3,25.0,42.9,16.7,33.3,20.0,22.2,16.7,25.0,0.0],
+    pct_1pt_cont: [null,null,null,null,null,null,null,null,null,null,null,null,null,null,57.1,60.0,33.3,66.7,50.0,18.2,33.3,20.0,33.3,16.7,28.6,16.7,60.0,66.7,33.3,50.0,50.0,22.2,50.0,42.9,100.0,22.2,50.0,0.0,22.2,50.0,33.3,40.0,50.0,16.7,0.0,75.0,33.3,100.0,50.0,25.0,80.0,75.0,57.1,0.0,20.0],
+  },
+  Albroz: {
+    pct_1pt: [50.0,26.7,33.3,25.0,0.0,50.0,25.0,16.7,60.0,44.4,14.3,50.0,0.0,37.5,60.0,14.3,44.4,14.3,40.0,62.5,25.0,30.8,38.5,25.0,62.5,37.5,57.1,33.3,30.0,22.2,0.0,62.5,42.9,66.7,25.0,25.0,25.0,35.7,39.1,15.4,30.8,42.9,50.0,33.3,0.0,25.0,100.0,25.0,25.0,40.0,50.0,60.0,44.4,50.0,22.2,14.3,30.8,28.6,36.4,18.2,40.0,50.0],
+    pct_2pt: [33.3,30.8,33.3,40.0,25.0,37.5,18.2,16.7,28.6,20.0,9.1,54.5,25.0,21.1,44.4,33.3,33.3,15.4,33.3,33.3,55.6,27.3,40.0,25.0,40.0,45.5,22.2,22.2,12.5,29.4,13.3,16.7,27.3,40.0,26.3,11.1,null,null,null,0.0,25.0,33.3,38.5,21.1,50.0,17.6,25.0,18.8,23.1,14.3,20.0,40.0,21.4,21.4,7.1,21.4,27.3,27.3,35.3,25.0,6.7,27.8],
+    pct_1pt_cont: [null,null,null,null,null,null,null,null,null,null,null,null,null,null,66.7,0.0,25.0,20.0,0.0,0.0,null,14.3,0.0,0.0,null,0.0,100.0,33.3,16.7,0.0,0.0,50.0,100.0,50.0,33.3,0.0,40.0,41.7,25.0,0.0,25.0,50.0,null,28.6,0.0,0.0,null,100.0,0.0,0.0,100.0,33.3,0.0,100.0,0.0,33.3,0.0,0.0,25.0,0.0,16.7,0.0],
+  },
+  Marwan: {
+    pct_1pt: [50.0,50.0,37.5,45.5,75.0,57.1,71.4,66.7,66.7,33.3,44.4,45.5,50.0,14.3,30.8,42.9,7.7,36.4,35.7,30.4,36.4,50.0,37.5,43.8,60.0,66.7,0.0,40.0,26.1,38.5,42.3,31.2,33.3,0.0,29.4,50.0,40.0,50.0,33.3,25.0,56.2,33.3,50.0,33.3,41.2,23.1,63.6,100.0,33.3,23.1,41.4,40.7,16.7],
+    pct_2pt: [33.3,27.3,10.0,57.1,41.7,57.1,33.3,12.5,0.0,0.0,25.0,0.0,25.0,20.0,20.0,44.4,33.3,36.4,60.0,11.1,14.3,20.0,44.4,11.1,36.4,12.5,10.0,14.3,null,null,null,20.0,20.0,0.0,45.5,0.0,18.2,0.0,12.5,16.7,0.0,18.8,33.3,13.3,27.3,33.3,30.8,15.4,38.5,29.4,11.1,23.1,11.1],
+    pct_1pt_cont: [null,null,null,null,null,null,null,null,null,33.3,0.0,0.0,20.0,20.0,33.3,50.0,0.0,0.0,50.0,33.3,12.5,50.0,0.0,25.0,0.0,50.0,0.0,33.3,33.3,25.0,14.3,33.3,100.0,null,50.0,0.0,50.0,100.0,0.0,null,60.0,100.0,100.0,100.0,40.0,20.0,50.0,100.0,33.3,0.0,0.0,33.3,20.0],
+  },
+  Jalal: {
+    pct_1pt: [33.3,27.3,29.4,53.8,45.5,83.3,25.0,42.9,50.0,42.9,50.0,40.0,50.0,40.0,52.6,40.0,33.3,40.0,42.9,30.8,45.5,44.4,30.0,50.0,33.3,35.7,72.7,25.0,35.7,8.3,32.6,32.4,30.0,40.7,50.0,40.0,47.4,50.0,42.9,42.9,60.0,42.9,70.0,66.7,61.5,52.9,12.5,44.4,57.1,66.7,25.0,58.3,57.1,23.1,40.6,27.3],
+    pct_2pt: [42.9,20.0,0.0,40.0,40.0,25.0,0.0,null,0.0,30.0,20.0,7.7,14.3,20.0,18.2,0.0,25.0,0.0,40.0,23.1,0.0,0.0,16.7,0.0,16.7,0.0,5.6,20.0,22.2,20.0,null,null,null,0.0,16.7,20.0,11.1,33.3,0.0,50.0,11.1,0.0,0.0,50.0,0.0,0.0,33.3,20.0,10.0,0.0,25.0,22.2,7.1,30.8,14.3,12.5],
+    pct_1pt_cont: [null,null,null,null,null,null,null,null,null,null,null,null,null,25.0,44.4,25.0,33.3,40.0,50.0,0.0,100.0,50.0,23.1,20.0,0.0,33.3,75.0,0.0,0.0,25.0,46.7,33.3,36.4,58.3,33.3,0.0,71.4,50.0,57.1,0.0,20.0,null,66.7,null,60.0,42.9,50.0,0.0,0.0,57.1,33.3,50.0,50.0,50.0,40.0,33.3],
+  },
+  Jackson: {
+    pct_1pt: [25.0,25.0,0.0,33.3,23.1,33.3,50.0,35.3,10.0,15.4,31.8,22.7,33.3,36.4,25.0,17.6,50.0,27.3,33.3,12.5,50.0],
+    pct_2pt: [0.0,33.3,20.0,10.0,11.1,0.0,37.5,16.7,28.6,0.0,0.0,50.0,0.0,0.0,14.3,20.0,33.3,10.0,20.0,25.0,28.6],
+    pct_1pt_cont: [null,null,null,null,null,null,null,null,0.0,25.0,40.0,28.6,33.3,100.0,0.0,33.3,100.0,20.0,0.0,50.0,100.0],
+  },
+  Moe: {
+    pct_1pt: [100.0,66.7,50.0,0.0,null,null,33.3,28.6,20.0,0.0,33.3,50.0,40.0,33.3,16.0,27.3,66.7,25.0,null,25.0,14.3,33.3,40.0,50.0,0.0,16.7,20.0,53.8],
+    pct_2pt: [22.2,0.0,20.0,60.0,16.7,0.0,0.0,22.2,8.3,20.0,0.0,25.0,null,null,null,42.9,20.0,14.3,60.0,11.1,25.0,55.6,9.1,0.0,20.0,9.1,12.5,0.0],
+    pct_1pt_cont: [null,null,0.0,0.0,null,null,50.0,100.0,0.0,0.0,25.0,null,22.2,42.9,0.0,50.0,50.0,50.0,null,33.3,0.0,60.0,0.0,20.0,null,null,0.0,25.0],
+  },
+};
+
+/* ============================================================
+   DUO DATA
+   ============================================================ */
+const ALL_DUOS = [
+  {key:'Erce & Marwan',     win_pct:0.900,games:10},
+  {key:'Erce & Jackson',    win_pct:0.875,games:8 },
+  {key:'Erce & Moe',        win_pct:0.778,games:9 },
+  {key:'Albroz & Marwan',   win_pct:0.750,games:4 },
+  {key:'Erce & Albroz',     win_pct:0.692,games:26},
+  {key:'Albroz & Fernando', win_pct:0.667,games:3 },
+  {key:'Erce & Jalal',      win_pct:0.500,games:10},
+  {key:'Albroz & Moe',      win_pct:0.467,games:15},
+  {key:'Marwan & Jackson',  win_pct:0.400,games:10},
+  {key:'Marwan & Moe',      win_pct:0.400,games:10},
+  {key:'Albroz & Jalal',    win_pct:0.273,games:22},
+  {key:'Jalal & Marwan',    win_pct:0.273,games:22},
+  {key:'Jackson & Jalal',   win_pct:0.000,games:6 },
+];
+
+const PLAYERS = Object.keys(STATS);
+let curPlayer = 'Erce';
+let charts = {}; // store all chart instances so we can destroy before rebuild
+
+
+/* ============================================================
+   HELPER: linear regression on non-null values
+   Returns {slope, intercept} for y = slope*x + intercept
+   ============================================================ */
+function linReg(vals) {
+  const pts = vals.map((v,i)=>({x:i+1,y:v})).filter(p=>p.y!==null&&p.y!==undefined&&!isNaN(p.y));
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const sumX = pts.reduce((s,p)=>s+p.x,0);
+  const sumY = pts.reduce((s,p)=>s+p.y,0);
+  const sumXY= pts.reduce((s,p)=>s+p.x*p.y,0);
+  const sumX2= pts.reduce((s,p)=>s+p.x*p.x,0);
+  const slope = (n*sumXY - sumX*sumY) / (n*sumX2 - sumX*sumX);
+  const intercept = (sumY - slope*sumX) / n;
+  return {slope, intercept};
+}
+
+/* Build best-fit line dataset covering the full x-range */
+function bestFitDataset(vals, color, label) {
+  const r = linReg(vals);
+  if (!r) return null;
+  const n = vals.length;
+  const fitData = Array.from({length:n},(_, i)=>{
+    const y = r.slope*(i+1) + r.intercept;
+    return +y.toFixed(1);
+  });
+  return {
+    label: label || 'Best fit',
+    data: fitData,
+    borderColor: color,
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderDash: [6, 3],
+    pointRadius: 0,
+    tension: 0,
+    order: 0,
+  };
+}
+
+/* ============================================================
+   HORIZONTAL BAR builder (no chart library)
+   ============================================================ */
+function makeBars(containerId, items) {
+  // items: [{label, value, max, color, suffix, sub}]
+  const el = document.getElementById(containerId);
+  el.innerHTML = items.map(it => {
+    const pct = Math.max(0, Math.round((it.value / (it.max || it.value)) * 100));
+    return `<div class="bar-row">
+      <span style="min-width:72px;color:#666;font-size:12px">${it.label}</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${it.color}"></div></div>
+      <span style="min-width:60px;text-align:right;font-weight:500;font-size:12px">${it.value}${it.suffix||''}</span>
+      ${it.sub ? `<span style="font-size:10px;color:#999;margin-left:4px">${it.sub}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+/* ============================================================
+   OVERVIEW TAB
+   ============================================================ */
+function renderOverview() {
+  const maxWin = Math.max(...PLAYERS.map(p=>STATS[p].win_pct));
+  const maxEfg  = Math.max(...PLAYERS.map(p=>STATS[p].efg));
+  const maxPts  = Math.max(...PLAYERS.map(p=>STATS[p].pts_pg));
+  const maxReb  = Math.max(...PLAYERS.map(p=>STATS[p].rbs_pg));
+
+  const byWin = [...PLAYERS].sort((a,b)=>STATS[b].win_pct-STATS[a].win_pct);
+  makeBars('ov-win-bars', byWin.map(p=>({label:p, value:STATS[p].win_pct.toFixed(1), max:maxWin, color:COLORS[p], suffix:'%'})));
+
+  const byEfg = [...PLAYERS].sort((a,b)=>STATS[b].efg-STATS[a].efg);
+  makeBars('ov-efg-bars', byEfg.map(p=>({label:p, value:STATS[p].efg.toFixed(1), max:maxEfg, color:COLORS[p], suffix:'%'})));
+
+  const byPts = [...PLAYERS].sort((a,b)=>STATS[b].pts_pg-STATS[a].pts_pg);
+  makeBars('ov-pts-bars', byPts.map(p=>({label:p, value:STATS[p].pts_pg.toFixed(2), max:maxPts, color:COLORS[p]})));
+
+  const byReb = [...PLAYERS].sort((a,b)=>STATS[b].rbs_pg-STATS[a].rbs_pg);
+  makeBars('ov-reb-bars', byReb.map(p=>({label:p, value:STATS[p].rbs_pg.toFixed(2), max:maxReb, color:COLORS[p]})));
+
+  // Misc: just show ast, stl, blk side by side for each player
+  const maxAst = Math.max(...PLAYERS.map(p=>STATS[p].ast_pg));
+  const byAst = [...PLAYERS].sort((a,b)=>STATS[b].ast_pg-STATS[a].ast_pg);
+  makeBars('ov-misc-bars', byAst.map(p=>({label:p,
+    value:`${STATS[p].ast_pg.toFixed(2)} ast / ${STATS[p].stl_pg.toFixed(2)} stl / ${STATS[p].blk_pg.toFixed(2)} blk`,
+    max:maxAst, color:COLORS[p]})));
+}
+
+/* ============================================================
+   PLAYER TAB
+   ============================================================ */
+function buildPlayerTabs() {
+  document.getElementById('ptabs').innerHTML = PLAYERS.map(p =>
+    `<button class="ptab${p===curPlayer?' active':''}"
+       style="${p===curPlayer?`border-color:${COLORS[p]};color:${COLORS[p]}`:''}"
+       onclick="selectPlayer('${p}',this)">${p}</button>`
+  ).join('');
+}
+
+function renderPlayer() {
+  const s = STATS[curPlayer], c = COLORS[curPlayer];
+  document.getElementById('p-metrics').innerHTML = [
+    {l:'Games',     v:s.games},
+    {l:'Pts/g',     v:s.pts_pg.toFixed(2)},
+    {l:'eFG%',      v:s.efg.toFixed(1)+'%'},
+    {l:'1pt%',      v:s.pct_1pt.toFixed(1)+'%'},
+    {l:'2pt%',      v:s.pct_2pt.toFixed(1)+'%'},
+    {l:'Cont 1pt%', v:s.pct_1pt_cont.toFixed(1)+'%'},
+    {l:'Reb/g',     v:s.rbs_pg.toFixed(2)},
+    {l:'Ast/g',     v:s.ast_pg.toFixed(2)},
+    {l:'Stl/g',     v:s.stl_pg.toFixed(2)},
+    {l:'Blk/g',     v:s.blk_pg.toFixed(2)},
+    {l:'TO/g',      v:s.to_pg.toFixed(2)},
+    {l:'Win%',      v:s.win_pct.toFixed(1)+'%'},
+  ].map(m=>`<div class="metric"><div class="ml">${m.l}</div><div class="mv">${m.v}</div></div>`).join('');
+
+  const maxShoot = Math.max(s.pct_1pt, s.pct_2pt, s.pct_1pt_cont, s.efg);
+  makeBars('p-shooting-bars',[
+    {label:'1pt %',      value:s.pct_1pt.toFixed(1),      max:maxShoot, color:c, suffix:'%'},
+    {label:'2pt %',      value:s.pct_2pt.toFixed(1),      max:maxShoot, color:c+'88', suffix:'%'},
+    {label:'Cont 1pt %', value:s.pct_1pt_cont.toFixed(1), max:maxShoot, color:c+'55', suffix:'%'},
+    {label:'eFG %',      value:s.efg.toFixed(1),          max:maxShoot, color:'#555', suffix:'%'},
+  ]);
+
+  document.getElementById('p-highs').innerHTML = [
+    {l:'Points',v:s.hi_pts},{l:'Rebounds',v:s.hi_trb},{l:'Assists',v:s.hi_ast},{l:'Steals',v:s.hi_stl},{l:'Blocks',v:s.hi_blk}
+  ].map(h=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f5f5f5;font-size:13px"><span style="color:#666">${h.l}</span><span style="font-weight:600;color:${c}">${h.v}</span></div>`).join('');
+
+  document.getElementById('p-format').innerHTML = `
+    <div class="bar-row"><span style="min-width:36px;color:#666">2v2</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${s.win_2v2}%;background:${c}"></div></div>
+      <span style="min-width:70px;text-align:right">${s.win_2v2.toFixed(1)}% (${s.g_2v2}g)</span></div>
+    <div class="bar-row"><span style="min-width:36px;color:#666">3v3</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${s.win_3v3}%;background:${c}88"></div></div>
+      <span style="min-width:70px;text-align:right">${s.win_3v3.toFixed(1)}% (${s.g_3v3}g)</span></div>`;
+
+  document.getElementById('p-rebs').innerHTML = `
+    <div class="bar-row"><span style="min-width:36px;color:#666">ORB</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${s.orb_pg/s.rbs_pg*100}%;background:${c}"></div></div>
+      <span style="min-width:60px;text-align:right">${s.orb_pg.toFixed(2)}/g</span></div>
+    <div class="bar-row"><span style="min-width:36px;color:#666">DRB</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${s.drb_pg/s.rbs_pg*100}%;background:${c}55"></div></div>
+      <span style="min-width:60px;text-align:right">${s.drb_pg.toFixed(2)}/g</span></div>
+    <div class="bar-row"><span style="min-width:36px;color:#666">Total</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:100%;background:#e5e7eb"></div></div>
+      <span style="min-width:60px;text-align:right">${s.rbs_pg.toFixed(2)}/g</span></div>`;
+}
+
+function selectPlayer(name, btn) {
+  curPlayer = name;
+  document.querySelectorAll('.ptab').forEach(b=>{b.classList.remove('active');b.style.borderColor='';b.style.color='';});
+  btn.classList.add('active'); btn.style.borderColor=COLORS[name]; btn.style.color=COLORS[name];
+  renderPlayer();
+}
+
+/* ============================================================
+   SHOOTING TRENDS TAB — the new section
+   ============================================================ */
+let shootPlayer = 'Erce';
+
+function buildShootTabs() {
+  document.getElementById('shoot-ptabs').innerHTML = PLAYERS.map(p=>
+    `<button class="ptab${p===shootPlayer?' active':''}"
+       style="${p===shootPlayer?`border-color:${COLORS[p]};color:${COLORS[p]}`:''}"
+       onclick="selectShootPlayer('${p}',this)">${p}</button>`
+  ).join('');
+}
+
+function selectShootPlayer(name, btn) {
+  shootPlayer = name;
+  document.querySelectorAll('#shoot-ptabs .ptab').forEach(b=>{b.classList.remove('active');b.style.borderColor='';b.style.color='';});
+  btn.classList.add('active'); btn.style.borderColor=COLORS[name]; btn.style.color=COLORS[name];
+  renderShootingCharts();
+}
+
+function makeShootChart(canvasId, vals, color, label, avgVal) {
+  if (charts[canvasId]) { charts[canvasId].destroy(); }
+
+  const labels = vals.map((_,i)=>`G${i+1}`);
+
+  // Scatter points (only non-null)
+  const scatterData = vals.map((v,i)=>v!==null?{x:i+1,y:v}:null).filter(Boolean);
+
+  // Best fit line
+  const fit = linReg(vals);
+  const fitData = fit ? vals.map((_,i)=>{
+    const y = fit.slope*(i+1) + fit.intercept;
+    return +y.toFixed(1);
+  }) : null;
+
+  // Career average line
+  const avgLine = vals.map(()=>+avgVal.toFixed(1));
+
+  const datasets = [
+    // Per-game bars (shown as bar)
+    {
+      type: 'bar',
+      label: label,
+      data: vals,
+      backgroundColor: color + '55',
+      borderColor: color + 'aa',
+      borderWidth: 1,
+      order: 2,
+    },
+  ];
+
+  if (fitData) {
+    datasets.push({
+      type: 'line',
+      label: 'Line of best fit',
+      data: fitData,
+      borderColor: '#FF4444',
+      backgroundColor: 'transparent',
+      borderWidth: 2.5,
+      borderDash: [6,3],
+      pointRadius: 0,
+      tension: 0,
+      order: 0,
+    });
+  }
+
+  datasets.push({
+    type: 'line',
+    label: `Career avg (${avgVal.toFixed(1)}%)`,
+    data: avgLine,
+    borderColor: color,
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderDash: [3,3],
+    pointRadius: 0,
+    tension: 0,
+    order: 1,
+  });
+
+  charts[canvasId] = new Chart(document.getElementById(canvasId), {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ctx.dataset.label + ': ' + (ctx.raw !== null ? ctx.raw + '%' : 'no data'),
+          }
+        }
+      },
+      scales: {
+        y: {
+          min: 0, max: 110,
+          ticks: { callback: v=>v+'%', color:'#888', stepSize:25 },
+          grid: { color:'#f0f0f0' },
+        },
+        x: {
+          ticks: { color:'#888', maxTicksLimit: 12 },
+          grid: { color:'#f0f0f0' },
+        },
+      },
+    },
+  });
+}
+
+function renderShootingCharts() {
+  const p = shootPlayer;
+  const c = COLORS[p];
+  const d = PER_GAME[p];
+  const s = STATS[p];
+
+  makeShootChart('chart1pt',   d.pct_1pt,      c,    '1pt % per game',       s.pct_1pt);
+  makeShootChart('chart2pt',   d.pct_2pt,      c,    '2pt % per game',       s.pct_2pt);
+  makeShootChart('chartCont',  d.pct_1pt_cont, c,    'Contested 1pt % per game', s.pct_1pt_cont);
+
+  // Overlay chart — all three types on one chart
+  if (charts['chartOverlay']) charts['chartOverlay'].destroy();
+  const n = d.pct_1pt.length;
+  const labels = Array.from({length:n},(_,i)=>`G${i+1}`);
+
+  const fit1 = linReg(d.pct_1pt);
+  const fit2 = linReg(d.pct_2pt);
+  const fitC = linReg(d.pct_1pt_cont);
+
+  const overlayDatasets = [
+    // 1pt line
+    { type:'line', label:'1pt %', data:d.pct_1pt, borderColor:c, backgroundColor:'transparent', borderWidth:2, pointRadius:2, pointHoverRadius:4, tension:0.3, spanGaps:false },
+    // 2pt line  
+    { type:'line', label:'2pt %', data:d.pct_2pt, borderColor:c+'88', backgroundColor:'transparent', borderWidth:2, pointRadius:2, pointHoverRadius:4, tension:0.3, spanGaps:false, borderDash:[] },
+    // Contested line
+    { type:'line', label:'Contested 1pt %', data:d.pct_1pt_cont, borderColor:'#999', backgroundColor:'transparent', borderWidth:1.5, pointRadius:2, tension:0.3, spanGaps:false },
+  ];
+
+  // Add best fit lines
+  if (fit1) overlayDatasets.push({
+    type:'line', label:'1pt trend',
+    data: Array.from({length:n},(_,i)=>+(fit1.slope*(i+1)+fit1.intercept).toFixed(1)),
+    borderColor:'#E24B4A', backgroundColor:'transparent', borderWidth:2, borderDash:[8,4], pointRadius:0, tension:0,
+  });
+  if (fit2) overlayDatasets.push({
+    type:'line', label:'2pt trend',
+    data: Array.from({length:n},(_,i)=>+(fit2.slope*(i+1)+fit2.intercept).toFixed(1)),
+    borderColor:'#EF9F27', backgroundColor:'transparent', borderWidth:2, borderDash:[8,4], pointRadius:0, tension:0,
+  });
+
+  // Career avg dashes
+  overlayDatasets.push(
+    { type:'line', label:`1pt avg (${s.pct_1pt.toFixed(1)}%)`, data:Array(n).fill(+s.pct_1pt.toFixed(1)), borderColor:c, backgroundColor:'transparent', borderWidth:1, borderDash:[3,3], pointRadius:0, tension:0 },
+    { type:'line', label:`2pt avg (${s.pct_2pt.toFixed(1)}%)`, data:Array(n).fill(+s.pct_2pt.toFixed(1)), borderColor:c+'88', backgroundColor:'transparent', borderWidth:1, borderDash:[3,3], pointRadius:0, tension:0 }
+  );
+
+  charts['chartOverlay'] = new Chart(document.getElementById('chartOverlay'), {
+    type: 'line',
+    data: { labels, datasets: overlayDatasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode:'index', intersect:false },
+      plugins: {
+        legend: { display:true, position:'top', labels:{ boxWidth:12, font:{size:11} } },
+        tooltip: { callbacks:{ label: ctx=>ctx.dataset.label+': '+(ctx.raw!==null?ctx.raw+'%':'no data') } }
+      },
+      scales: {
+        y: { min:0, max:110, ticks:{ callback:v=>v+'%', color:'#888', stepSize:25 }, grid:{color:'#f0f0f0'} },
+        x: { ticks:{ color:'#888', maxTicksLimit:12 }, grid:{color:'#f0f0f0'} },
+      },
+    },
+  });
+}
+
+/* ============================================================
+   DUO TABLE
+   ============================================================ */
+function buildDuoTable() {
+  document.getElementById('duo-table').innerHTML = ALL_DUOS.map(d=>
+    `<tr><td style="font-weight:500">${d.key}</td><td>${d.games}</td>
+     <td><span class="badge ${d.win_pct>=0.6?'bg':d.win_pct>=0.4?'bi':'br'}">${(d.win_pct*100).toFixed(0)}%</span></td></tr>`
+  ).join('');
+}
+
+/* ============================================================
+   TAB SWITCHER
+   ============================================================ */
+function showTab(name, btn) {
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+  if (name==='player') renderPlayer();
+  if (name==='shooting') renderShootingCharts();
+  if (name==='rankings') renderRankings();
+}
+
+/* ============================================================
+   SHOOTING RANKINGS TAB
+   ============================================================ */
+
+/* Contested 2pt stats computed from raw totals in notebook */
+const CONT_2PT = {
+  Erce:    { made:3,  att:18  },   // pct = 16.7%
+  Albroz:  { made:38, att:183 },   // pct = 20.8%
+  Marwan:  { made:9,  att:60  },   // pct = 15.0%
+  Jalal:   { made:9,  att:59  },   // pct = 15.3%
+  Jackson: { made:0,  att:7   },   // pct = 0%
+  Moe:     { made:1,  att:14  },   // pct = 7.1%
+};
+
+const MEDALS = ['🥇','🥈','🥉','4th','5th','6th'];
+
+function rankBar(containerId, statKey, label, inverted) {
+  /* Sort players by the stat, build ranked bar rows with medals */
+  const sorted = [...PLAYERS]
+    .map(p => ({ name:p, val: STATS[p][statKey] }))
+    .sort((a,b) => inverted ? a.val - b.val : b.val - a.val);
+
+  const max = sorted[0].val;
+  const min = sorted[sorted.length-1].val;
+  const range = max - min || 1;
+
+  document.getElementById(containerId).innerHTML = sorted.map(({name,val}, i) => {
+    const pct = Math.round((val - min) / range * 100);
+    const gap = STATS[name].pct_1pt_cont !== undefined
+      ? (STATS[name].pct_1pt - STATS[name].pct_1pt_cont).toFixed(1)
+      : null;
+    return `<div class="bar-row">
+      <span style="font-size:13px;min-width:24px">${MEDALS[i]||''}</span>
+      <span style="min-width:68px;color:#555;font-size:12px;font-weight:${i===0?'600':'400'}">${name}</span>
+      <div class="bar-bg">
+        <div class="bar-fill" style="width:${inverted?(100-pct):pct}%;background:${COLORS[name]}"></div>
+      </div>
+      <span style="min-width:52px;text-align:right;font-weight:600;font-size:13px;color:${COLORS[name]}">${val.toFixed(1)}%</span>
+    </div>`;
+  }).join('');
+}
+
+function renderRankings() {
+  /* Guard: only build once */
+  if (document.getElementById('rank-1pt').innerHTML) return;
+
+  /* 1pt% */
+  rankBar('rank-1pt', 'pct_1pt', '1pt %', false);
+
+  /* 2pt% */
+  rankBar('rank-2pt', 'pct_2pt', '2pt %', false);
+
+  /* Contested 1pt% */
+  const sorted1ptCont = [...PLAYERS]
+    .map(p => ({ name:p, val: STATS[p].pct_1pt_cont }))
+    .sort((a,b) => b.val - a.val);
+  const max1c = sorted1ptCont[0].val, min1c = sorted1ptCont[sorted1ptCont.length-1].val, rng1c = max1c - min1c || 1;
+  document.getElementById('rank-cont1pt').innerHTML = sorted1ptCont.map(({name,val},i) => {
+    const pct = Math.round((val-min1c)/rng1c*100);
+    const open = STATS[name].pct_1pt;
+    const diff = (open - val).toFixed(1);
+    const diffCol = parseFloat(diff) > 5 ? '#991b1b' : parseFloat(diff) < 0 ? '#065f46' : '#888';
+    return `<div class="bar-row">
+      <span style="font-size:13px;min-width:24px">${MEDALS[i]||''}</span>
+      <span style="min-width:68px;color:#555;font-size:12px;font-weight:${i===0?'600':'400'}">${name}</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${COLORS[name]}"></div></div>
+      <span style="min-width:52px;text-align:right;font-weight:600;font-size:13px;color:${COLORS[name]}">${val.toFixed(1)}%</span>
+      <span style="font-size:11px;color:${diffCol};min-width:70px;text-align:right">${parseFloat(diff)>0?'+':''}${diff}pp vs open</span>
+    </div>`;
+  }).join('');
+
+  /* Contested 2pt% */
+  const sorted2ptCont = [...PLAYERS]
+    .map(p => {
+      const c = CONT_2PT[p];
+      return { name:p, val: c.att > 0 ? +(c.made/c.att*100).toFixed(1) : 0, att:c.att };
+    })
+    .sort((a,b) => b.val - a.val);
+  const max2c = sorted2ptCont[0].val || 1;
+  document.getElementById('rank-cont2pt').innerHTML = sorted2ptCont.map(({name,val,att},i) => {
+    const pct = Math.round(val/max2c*100);
+    return `<div class="bar-row">
+      <span style="font-size:13px;min-width:24px">${MEDALS[i]||''}</span>
+      <span style="min-width:68px;color:#555;font-size:12px;font-weight:${i===0?'600':'400'}">${name}</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${COLORS[name]}"></div></div>
+      <span style="min-width:52px;text-align:right;font-weight:600;font-size:13px;color:${COLORS[name]}">${val.toFixed(1)}%</span>
+      <span style="font-size:11px;color:#888;min-width:52px;text-align:right">${att} att</span>
+    </div>`;
+  }).join('');
+
+  /* Gap chart: open minus contested 1pt% — positive = worse under pressure */
+  const sortedGap = [...PLAYERS]
+    .map(p => ({ name:p, gap: +(STATS[p].pct_1pt - STATS[p].pct_1pt_cont).toFixed(1) }))
+    .sort((a,b) => b.gap - a.gap);
+  const maxGap = Math.max(...sortedGap.map(x=>Math.abs(x.gap)));
+  document.getElementById('rank-gap').innerHTML = sortedGap.map(({name,gap}) => {
+    const pos = gap >= 0;
+    const barW = Math.round(Math.abs(gap)/maxGap*100);
+    const col = gap > 8 ? '#991b1b' : gap > 3 ? '#EF9F27' : gap < 0 ? '#065f46' : '#888';
+    return `<div class="bar-row">
+      <span style="min-width:68px;color:#555;font-size:12px">${name}</span>
+      <div style="flex:1;display:flex;align-items:center;height:8px">
+        <div style="flex:1;display:flex;justify-content:flex-end">
+          ${!pos?`<div style="width:${barW}%;height:8px;background:#065f46;border-radius:3px 0 0 3px"></div>`:''}
+        </div>
+        <div style="width:1px;height:16px;background:#ddd;flex-shrink:0"></div>
+        <div style="flex:1">
+          ${pos?`<div style="width:${barW}%;height:8px;background:${col};border-radius:0 3px 3px 0"></div>`:''}
+        </div>
+      </div>
+      <span style="min-width:80px;text-align:right;font-weight:600;font-size:12px;color:${col}">
+        ${gap > 0?'+':''}${gap}pp ${gap < 0 ? '↑ better contested' : gap > 5 ? '↓ struggles' : ''}
+      </span>
+    </div>`;
+  }).join('');
+
+  /* Summary table */
+  const ranks = {};
+  ['pct_1pt','pct_2pt','pct_1pt_cont'].forEach(key => {
+    const sorted = [...PLAYERS].sort((a,b)=>STATS[b][key]-STATS[a][key]);
+    sorted.forEach((p,i) => { ranks[p] = ranks[p]||{}; ranks[p][key] = i+1; });
+  });
+  const sortedCont2 = [...PLAYERS].map(p=>({name:p,val:CONT_2PT[p].att>0?+(CONT_2PT[p].made/CONT_2PT[p].att*100).toFixed(1):0})).sort((a,b)=>b.val-a.val);
+  sortedCont2.forEach(({name},i)=>{ ranks[name]['pct_2pt_cont']=i+1; });
+
+  const medalEmoji = r => r===1?'🥇':r===2?'🥈':r===3?'🥉':r;
+  document.getElementById('rank-tbody').innerHTML = [...PLAYERS]
+    .sort((a,b) => STATS[b].pct_1pt - STATS[a].pct_1pt)
+    .map(p => {
+      const c2val = CONT_2PT[p].att>0?+(CONT_2PT[p].made/CONT_2PT[p].att*100).toFixed(1):0;
+      const gap = +(STATS[p].pct_1pt - STATS[p].pct_1pt_cont).toFixed(1);
+      const gapCol = gap>8?'#991b1b':gap>3?'#92400e':gap<0?'#065f46':'#555';
+      return `<tr>
+        <td style="font-weight:600;color:${COLORS[p]}">${p}</td>
+        <td style="font-weight:500">${STATS[p].pct_1pt.toFixed(1)}%</td>
+        <td style="font-size:16px;text-align:center">${medalEmoji(ranks[p].pct_1pt)}</td>
+        <td style="font-weight:500">${STATS[p].pct_2pt.toFixed(1)}%</td>
+        <td style="font-size:16px;text-align:center">${medalEmoji(ranks[p].pct_2pt)}</td>
+        <td style="font-weight:500">${STATS[p].pct_1pt_cont.toFixed(1)}%</td>
+        <td style="font-size:16px;text-align:center">${medalEmoji(ranks[p].pct_1pt_cont)}</td>
+        <td style="font-weight:500">${c2val.toFixed(1)}%</td>
+        <td style="font-size:16px;text-align:center">${medalEmoji(ranks[p].pct_2pt_cont)}</td>
+        <td style="font-weight:600;color:${gapCol}">${gap>0?'+':''}${gap}pp</td>
+      </tr>`;
+    }).join('');
+
+  /* Radar chart */
+  buildRadarTabs();
+  renderRadar('Erce');
+}
+
+/* Radar tab strip */
+let radarChart = null;
+let curRadarPlayer = 'Erce';
+
+function buildRadarTabs() {
+  document.getElementById('radar-ptabs').innerHTML = PLAYERS.map(p=>
+    `<button class="ptab${p===curRadarPlayer?' active':''}"
+       style="${p===curRadarPlayer?`border-color:${COLORS[p]};color:${COLORS[p]}`:''}"
+       onclick="selectRadar('${p}',this)">${p}</button>`
+  ).join('');
+}
+
+function selectRadar(name, btn) {
+  curRadarPlayer = name;
+  document.querySelectorAll('#radar-ptabs .ptab').forEach(b=>{b.classList.remove('active');b.style.borderColor='';b.style.color='';});
+  btn.classList.add('active'); btn.style.borderColor=COLORS[name]; btn.style.color=COLORS[name];
+  renderRadar(name);
+}
+
+function renderRadar(name) {
+  if (radarChart) radarChart.destroy();
+  const s = STATS[name];
+  const c = COLORS[name];
+  const c2val = CONT_2PT[name].att>0?+(CONT_2PT[name].made/CONT_2PT[name].att*100).toFixed(1):0;
+
+  /* Normalise each stat 0–100 within the group for the radar */
+  const statKeys = ['pct_1pt','pct_2pt','pct_1pt_cont'];
+  const groupMax = {};
+  const groupMin = {};
+  statKeys.forEach(k=>{
+    groupMax[k] = Math.max(...PLAYERS.map(p=>STATS[p][k]));
+    groupMin[k] = Math.min(...PLAYERS.map(p=>STATS[p][k]));
+  });
+  const maxC2 = Math.max(...PLAYERS.map(p=>CONT_2PT[p].att>0?CONT_2PT[p].made/CONT_2PT[p].att*100:0));
+  const minC2 = 0;
+
+  function norm(v,mn,mx){return Math.round((v-mn)/(mx-mn||1)*100);}
+
+  const vals = [
+    norm(s.pct_1pt,      groupMin.pct_1pt,      groupMax.pct_1pt),
+    norm(s.pct_2pt,      groupMin.pct_2pt,      groupMax.pct_2pt),
+    norm(s.pct_1pt_cont, groupMin.pct_1pt_cont, groupMax.pct_1pt_cont),
+    norm(c2val,          minC2,                 maxC2),
+  ];
+
+  radarChart = new Chart(document.getElementById('radarChart'), {
+    type: 'radar',
+    data: {
+      labels: ['1pt %', '2pt %', 'Contested 1pt %', 'Contested 2pt %'],
+      datasets: [{
+        label: name,
+        data: vals,
+        borderColor: c,
+        backgroundColor: c + '30',
+        pointBackgroundColor: c,
+        pointRadius: 5,
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display:false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const labels = [
+                `1pt %: ${s.pct_1pt.toFixed(1)}%`,
+                `2pt %: ${s.pct_2pt.toFixed(1)}%`,
+                `Contested 1pt %: ${s.pct_1pt_cont.toFixed(1)}%`,
+                `Contested 2pt %: ${c2val.toFixed(1)}%`,
+              ];
+              return labels[ctx.dataIndex];
+            }
+          }
+        }
+      },
+      scales: {
+        r: {
+          min: 0, max: 100,
+          ticks: { display:false, stepSize:25 },
+          grid: { color:'rgba(128,128,128,0.2)' },
+          pointLabels: { color:'#666', font:{ size:12 } },
+        }
+      }
+    }
+  });
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+renderOverview();
+buildPlayerTabs();
+renderPlayer();
+buildShootTabs();
+buildDuoTable();
+
+</script>
+</body>
+</html>
